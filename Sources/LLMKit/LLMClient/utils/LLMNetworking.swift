@@ -20,8 +20,7 @@ public actor LLMNetworking {
     
     public init(
         baseURL: URL = URL(
-            //        string: "https://llm.chocoford.com"
-            string: "http://127.0.0.1:8080"
+            string: "http://127.0.0.1:8080" // BASE_URL
         )!,
         session: URLSession = .shared
     ) {
