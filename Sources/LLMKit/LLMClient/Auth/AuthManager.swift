@@ -23,9 +23,9 @@ public actor LLMAuthManager {
         self.onAuthStateChanged = onAuthStateChanged
     }
 
-    public func restore(productID: String) async {
+    public func restore(productIDs: [String]) async {
         do {
-            let token = try await provider.restoreAuth(productID: productID)
+            let token = try await provider.restoreAuth(productIDs: productIDs)
             await self.provider.networking.setToken(token)
             self.onAuthStateChanged(true)
         } catch {
@@ -34,21 +34,16 @@ public actor LLMAuthManager {
         }
     }
     
-//    public func restore(transactionSignedData: String) async {
-//        do {
-//            let token = try await provider.restoreAuth(productID: productID)
-//            self.token = token
-//            self.onAuthStateChanged(true)
-//        } catch {
-//            self.token = nil
-//            self.onAuthStateChanged(false)
-//        }
-//    }
-    
-//    private func applyToken(_ token: String?) async {
-//        // self.token = token
-//        self.onAuthStateChanged(token != nil)
-//    }
+    public func restore(groupID: String) async {
+        do {
+            let token = try await provider.restoreAuth(groupID: groupID)
+            await self.provider.networking.setToken(token)
+            self.onAuthStateChanged(true)
+        } catch {
+            await self.provider.networking.setToken(nil)
+            self.onAuthStateChanged(false)
+        }
+    }
     
     /// Return the current balance after purchase
     public func purchaseCompleted(jws: String) async throws -> Double {
@@ -56,15 +51,4 @@ public actor LLMAuthManager {
         // self.token = response.token
         return response.balance
     }
-
-//    public func getToken() throws -> String {
-//        guard let token else {
-//            throw NSError(
-//                domain: "LLMAuth",
-//                code: 401,
-//                userInfo: [NSLocalizedDescriptionKey: "Missing access token, call restore() first"]
-//            )
-//        }
-//        return token
-//    }
 }

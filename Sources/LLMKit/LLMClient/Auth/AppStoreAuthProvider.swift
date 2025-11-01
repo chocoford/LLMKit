@@ -28,25 +28,24 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
         self.ascAppID = ascAppID
     }
 
-    public func restoreAuth(productID: String) async throws -> String {
-        listenTrasacionsUpdates(productID: productID)
+    public func restoreAuth(productIDs: [String]) async throws -> String {
+        listenTrasacionsUpdates(productIDs: productIDs)
         do {
             /// Asynchronously advances to the next element and returns it, or ends the sequence if there is no next element.
             /// 会一次性把所有的 transaction 都遍历完
             for await result in Transaction.currentEntitlements {
                 if case .verified(let transaction) = result,
-                   transaction.productID == productID {
-                    
+                   productIDs.contains(transaction.productID) {
+                    let productID = transaction.productID
                     logger.info("Found existing entitlement for product: \(productID), originalID: \(transaction.originalID)")
                     
                     // 这里你可以触发 register / add credits
                     struct RestoreResponse: Codable {
                         let token: String
                     }
-                    let originalID = String(transaction.originalID)
-                    
+
                     let req = IAPAuthRequest(
-                        originalTransactionID: originalID,
+                        jws: result.jwsRepresentation,
                         bundleID: bundleID,
                         ascAppID: ascAppID
                     )
@@ -61,7 +60,43 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
                 code: 401,
                 userInfo: [NSLocalizedDescriptionKey: "No entitlement found"]
             )
-            
+        } catch {
+            logger.error("Restore auth error: \(error.localizedDescription)")
+            throw error
+        }
+    }
+    
+    public func restoreAuth(groupID: String) async throws -> String {
+        do {
+            /// Asynchronously advances to the next element and returns it, or ends the sequence if there is no next element.
+            /// 会一次性把所有的 transaction 都遍历完
+            for await result in Transaction.currentEntitlements {
+                if case .verified(let transaction) = result,
+                   transaction.subscriptionGroupID == groupID {
+                    let productID = transaction.productID
+                    logger.info("Found existing entitlement for product: \(productID), originalID: \(transaction.originalID)")
+                    
+                    // 这里你可以触发 register / add credits
+                    struct RestoreResponse: Codable {
+                        let token: String
+                    }
+
+                    let req = IAPAuthRequest(
+                        jws: result.jwsRepresentation,
+                        bundleID: bundleID,
+                        ascAppID: ascAppID
+                    )
+                    let data: RestoreResponse = try await networking.post("/auth/iap", body: req)
+                    
+                    // 调后端 /auth/restore
+                    return data.token
+                }
+            }
+            throw NSError(
+                domain: "LLMAuth",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "No entitlement found"]
+            )
         } catch {
             logger.error("Restore auth error: \(error.localizedDescription)")
             throw error
@@ -79,13 +114,14 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
         return data
     }
     
-    public func listenTrasacionsUpdates(productID: String) {
+    public func listenTrasacionsUpdates(productIDs: [String]) {
         Task.detached {
             // 2. 监听新购买/续订
-            do {
+//            do {
                 for await update in Transaction.updates {
                     if case .verified(let transaction) = update,
-                       transaction.productID == productID {
+                       productIDs.contains(transaction.productID) {
+                        let productID = transaction.productID
                         
                         if #available(iOS 17.0, macOS 14.0, *) {
                             logger.info("""
@@ -94,11 +130,11 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
                         - originalID: \(transaction.originalID)
                         - productID: \(transaction.productID)
                         - purchaseDate: \(transaction.purchaseDate)
-                        - expirationDate: \(transaction.expirationDate)
+                        - expirationDate: \(String(describing: transaction.expirationDate))
                         - environment: \(String(describing: transaction.environment))
                         - ownershipType: \(String(describing: transaction.ownershipType))
                         - isUpgraded: \(transaction.isUpgraded)
-                        - revocationDate: \(transaction.revocationDate)
+                        - revocationDate: \(String(describing: transaction.revocationDate))
                         - revocationReason: \(String(describing: transaction.revocationReason))
                         - appAccountToken: \(transaction.appAccountToken?.uuidString ?? "nil")
                         """)
@@ -119,40 +155,12 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
 //                        
                     }
                 }
-            } catch {
-                logger.error("Restore auth error: \(error.localizedDescription)")
-            }
+//            } catch {
+//                logger.error("Restore auth error: \(error.localizedDescription)")
+//            }
         }
     }
 }
-
-
-//extension LLMAuthProvider where Self == AppStoreAuthProvider {
-//    public static func appStore(
-//        bundleID: String,
-//        ascAppID: Int64
-//    ) -> (LLMNetworking) -> AppStoreAuthProvider {
-//        return { networking in
-//            AppStoreAuthProvider(
-//                networking: networking,
-//                bundleID: bundleID,
-//                ascAppID: ascAppID
-//            )
-//        }
-//    }
-//    
-//    public static func xcode(
-//        bundleID: String,
-//    ) -> (LLMNetworking) -> AppStoreAuthProvider {
-//        return { networking in
-//            AppStoreAuthProvider(
-//                networking: networking,
-//                bundleID: bundleID,
-//                ascAppID: nil
-//            )
-//        }
-//    }
-//}
 
 public struct AppStoreAuthProviderBuilder: LLMAuthProviderBuilder {
     var bundleID: String

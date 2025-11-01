@@ -9,15 +9,16 @@
 import SwiftUI
 import LLMCore
 
+@available(iOS 17.0, macOS 14.0, watchOS 10.0, tvOS 17.0, *)
 public struct ConversationProvider: View {
     
-    @EnvironmentObject private var llmState: LLMStateObject
+    @Environment(LLMState.self) private var llmState
     
-    var conversationID: UUID
+    var conversationID: String
     var content: (_ conversation: Conversation?) -> AnyView
     
     public init<Content: View>(
-        conversationID: UUID,
+        conversationID: String,
         @ViewBuilder content: @escaping (_: Conversation?) -> Content
     ) {
         self.conversationID = conversationID
@@ -32,19 +33,26 @@ public struct ConversationProvider: View {
     }
     
     let proxy = Proxy()
+    let config = Config()
     
     var conversation: Conversation? {
-        llmState.conversations.first { $0.id == conversationID }
+        llmState.conversations.value?.first { $0.id == conversationID }
     }
     
     public var body: some View {
         content(conversation)
-//            .onChange(of: conversation) { newValue in
-//                proxy.messages = newValue?.messages ?? []
-//            }
-//            .onAppear {
-//                proxy.messages = conversation?.messages ?? []
-//            }
+    }
+    
+    
+    class Config {
+        
+    }
+    
+    public func onConversationPhaseChange(
+        _ action: (_ oldPhase: ConversationPhase, _ newPhase: ConversationPhase) -> Void
+    ) -> Self {
+        
+        return self
     }
 }
 

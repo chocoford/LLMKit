@@ -13,31 +13,41 @@ import LLMCore
 public final class LLMClient: Sendable {
     private let authManager: LLMAuthManager
     internal let networking: LLMNetworking
+    internal let uploader: (any LLMFileUploadProvider)?
+    internal let uploadPolicy: LLMUploadPolicy?
 
     private let logger = Logger(label: "LLMClient")
     
     public init(
-        provider: LLMAuthProvider
+        authProvider: LLMAuthProvider,
+        uploadProvider: (any LLMFileUploadProvider)? = nil,
+        uploadPolicy: LLMUploadPolicy? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
-        self.authManager = LLMAuthManager(provider: provider) {
+        self.authManager = LLMAuthManager(provider: authProvider) {
             authStateChangedPublisher.send($0)
         }
         self.authStateChangedPublisher = authStateChangedPublisher
+        self.uploader = uploadProvider
+        self.uploadPolicy = uploadPolicy
     }
     
     public init(
-        provider: any LLMAuthProviderBuilder
+        authProvider: any LLMAuthProviderBuilder,
+        uploadProvider: (any LLMFileUploadProviderBuilder)? = nil,
+        uploadPolicy: LLMUploadPolicy? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
-        self.authManager = LLMAuthManager(provider: provider(self.networking)) { isAuthenticated in
+        self.authManager = LLMAuthManager(provider: authProvider(self.networking)) { isAuthenticated in
             DispatchQueue.main.async {
                 authStateChangedPublisher.send(isAuthenticated)
             }
         }
         self.authStateChangedPublisher = authStateChangedPublisher
+        self.uploader = uploadProvider?(self.networking)
+        self.uploadPolicy = uploadPolicy
     }
     
     init() {
@@ -47,13 +57,27 @@ public final class LLMClient: Sendable {
             authStateChangedPublisher.send($0)
         }
         self.authStateChangedPublisher = authStateChangedPublisher
+        self.uploader = nil
+        self.uploadPolicy = nil
     }
     
     internal let authStateChangedPublisher: PassthroughSubject<Bool, Never>
     
     // 应用启动时调用
-    public func restore(productID: String) async {
-        await authManager.restore(productID: productID)
+    public func restore(productIDs: [String]) async {
+        await authManager.restore(productIDs: productIDs)
+        
+        if await authManager.isAuthenticated {
+            do {
+                _ = try await self.getCredits()
+            } catch {
+                logger.error("Failed to fetch credits after restore: \(error)")
+            }
+        }
+    }
+    
+    public func restore(groupID: String) async {
+        await authManager.restore(groupID: groupID)
         
         if await authManager.isAuthenticated {
             do {

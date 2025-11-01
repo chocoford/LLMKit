@@ -20,7 +20,7 @@ public actor LLMNetworking {
     
     public init(
         baseURL: URL = URL(
-            string: "http://127.0.0.1:8080" // BASE_URL
+            string: "http://127.0.0.1:8080" // BASE_URL "https://llm.chocoford.com" // 
         )!,
         session: URLSession = .shared
     ) {
@@ -72,7 +72,7 @@ public actor LLMNetworking {
                     }
                     
                     for try await line in bytes.lines {
-                         print("Received line: \(line)")
+                        // print("Received line: \(line)")
                         if line.hasPrefix("data: ") {
                             let jsonPart = String(line.dropFirst(6))
                             if jsonPart == "[DONE]" {
@@ -81,15 +81,18 @@ public actor LLMNetworking {
                             }
                             
                             // 尝试解码成目标类型
-                            if let data = jsonPart.data(using: .utf8) {
+                            if !jsonPart.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                let data = jsonPart.data(using: .utf8) {
                                 do {
                                     let decoded = try JSONDecoder().decode(StreamChatResponse<R>.self, from: data)
                                     continuation.yield(decoded)
                                 } catch {
-                                    continuation.finish(throwing: error)
-                                    break
+                                    print(error)
+                                    continue
                                 }
                             }
+                        } else {
+                            
                         }
                     }
                     continuation.finish()

@@ -29,27 +29,18 @@ extension LLMClient {
     
     public func chat(
         model: SupportedModel,
-        messages: [ChatMessage]
-    ) async throws -> AsyncThrowingStream<StreamChatResponse<ChatStreamResult>, Error> {
-        try await networking.stream("/chat", body: ChatRequest(model: model, messages: messages))
-    }
-
-    public func nanoBanana(
-        message: String
+        messages: [ChatMessageContent]
     ) async throws -> APIResponse<ChatResponse> {
-        try await networking.post("/chat/banana", body: ChatRequest(
-            model: .nanoBanana,
-            systemPrompt: nil,
-            userPrompt: message
-        ))
+        try await networking.post(
+            "/chat",
+            body: ChatRequest(model: model, messages: messages)
+        )
     }
     
-    public func nanoBanana(
-        messages: [ChatMessage]
-    ) async throws -> APIResponse<ChatResponse> {
-        try await networking.post("/chat/banana", body: ChatRequest(
-            model: .nanoBanana,
-            messages: messages
-        ))
+    public func streamChat(
+        model: SupportedModel,
+        messages: [ChatMessageContent]
+    ) async throws -> AsyncThrowingStream<StreamChatResponse<ChatStreamResult>, Error> {
+        try await networking.stream("/chat/stream", body: ChatRequest(model: model, messages: messages))
     }
 }
