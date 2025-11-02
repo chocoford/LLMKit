@@ -20,7 +20,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(path: "../LLMCore"),
+        .package(url: "https://github.com/chocoford/LLMCore.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
     ],
     targets: [
