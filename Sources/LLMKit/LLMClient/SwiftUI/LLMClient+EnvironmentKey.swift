@@ -7,7 +7,10 @@
 
 #if canImport(SwiftUI)
 import SwiftUI
+import Combine
+
 import Logging
+import ChocofordUI
 
 private struct LLMClientKey: EnvironmentKey {
     static let defaultValue: LLMClient = .init()
@@ -108,6 +111,8 @@ struct LLMStateProvider: View {
 }
 
 public struct LLMClientProvider: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+    
     let logger = Logger(label: "LLMClientProvider")
 
     let llmClient: LLMClient
@@ -146,6 +151,8 @@ public struct LLMClientProvider: ViewModifier {
             lagacy: false
         )
     }
+    
+    @State private var refreshCreditsPassthrough = PassthroughSubject<Void, Never>()
 
     public func body(content: Content) -> some View {
         LLMStateProvider(
@@ -161,6 +168,18 @@ public struct LLMClientProvider: ViewModifier {
                 }
                 .onReceive(llmClient.authStateChangedPublisher) { isAuthenticated in
                     state.isAuthenticated = isAuthenticated
+                }
+                .onReceive(refreshCreditsPassthrough.throttle(for: 30.0, scheduler: RunLoop.main, latest: true)) { _ in
+                    Task {
+                        if let credits = try? await llmClient.getCredits() {
+                            state.updateCredits(credits)
+                        }
+                    }
+                }
+                .watchImmediately(of: scenePhase) { newValue in
+                    if newValue == .active {
+                        refreshCreditsPassthrough.send()
+                    }
                 }
         }
     }

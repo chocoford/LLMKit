@@ -19,12 +19,13 @@ public actor LLMNetworking {
     private let logger = Logger(label: "LLMNetworking")
     
     public init(
-        baseURL: URL = URL(
-            string: "http://127.0.0.1:8080" // BASE_URL "https://llm.chocoford.com" // 
-        )!,
         session: URLSession = .shared
     ) {
-        self.baseURL = baseURL
+//#if DEBUG
+        self.baseURL = URL(string: "http://127.0.0.1:8080")!
+//#else
+//        self.baseURL = URL(string: "https://llm.chocoford.com")!
+//#endif
         self.session = session
     }
 
