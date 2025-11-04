@@ -10,7 +10,6 @@ import SwiftUI
 import Combine
 
 import Logging
-import ChocofordUI
 
 private struct LLMClientKey: EnvironmentKey {
     static let defaultValue: LLMClient = .init()
@@ -115,11 +114,13 @@ public struct LLMClientProvider: ViewModifier {
     
     let logger = Logger(label: "LLMClientProvider")
 
+    var llmState: LLMStatable?
     let llmClient: LLMClient
     var persistenceProvider: PersistenceProvider?
     var lagacy: Bool
     
     internal init(
+        state: LLMStatable?,
         llmClient: LLMClient,
         persistenceProvider: PersistenceProvider?,
         lagacy: Bool = false
@@ -130,10 +131,12 @@ public struct LLMClientProvider: ViewModifier {
     }
     
     public static func lagacy(
+        state: LLMStateObject? = nil,
         llmClient: LLMClient,
         persistenceProvider: PersistenceProvider?
     ) -> LLMClientProvider {
         LLMClientProvider(
+            state: state,
             llmClient: llmClient,
             persistenceProvider: persistenceProvider,
             lagacy: true
@@ -142,10 +145,12 @@ public struct LLMClientProvider: ViewModifier {
     
     @available(iOS 17.0, macOS 14.0, watchOS 10.0, tvOS 17.0, *)
     public static func modern(
+        state: LLMState? = nil,
         llmClient: LLMClient,
         persistenceProvider: PersistenceProvider?
     ) -> LLMClientProvider {
         LLMClientProvider(
+            state: state,
             llmClient: llmClient,
             persistenceProvider: persistenceProvider,
             lagacy: false
@@ -155,33 +160,53 @@ public struct LLMClientProvider: ViewModifier {
     @State private var refreshCreditsPassthrough = PassthroughSubject<Void, Never>()
 
     public func body(content: Content) -> some View {
-        LLMStateProvider(
-            llmClient: llmClient,
-            persistenceProvider: persistenceProvider,
-            lagacy: lagacy
-        ) { state in
+        if let llmState {
             content
-                .environment(\.llmClient, llmClient)
-                .onReceive(llmClient.creditsUpdatePublisher) { credits in
-                    logger.info("Credits updated: \(credits)")
-                    state.updateCredits(credits)
-                }
-                .onReceive(llmClient.authStateChangedPublisher) { isAuthenticated in
-                    state.isAuthenticated = isAuthenticated
-                }
-                .onReceive(refreshCreditsPassthrough.throttle(for: 30.0, scheduler: RunLoop.main, latest: true)) { _ in
-                    Task {
-                        if let credits = try? await llmClient.getCredits() {
-                            state.updateCredits(credits)
-                        }
-                    }
-                }
-                .watchImmediately(of: scenePhase) { newValue in
-                    if newValue == .active {
-                        refreshCreditsPassthrough.send()
-                    }
-                }
+                .modifier(LLMClientProviderContent(llmClient: llmClient, state: llmState))
+        } else {
+            LLMStateProvider(
+                llmClient: llmClient,
+                persistenceProvider: persistenceProvider,
+                lagacy: lagacy
+            ) { state in
+                content
+                    .modifier(LLMClientProviderContent(llmClient: llmClient, state: state))
+            }
         }
+    }
+}
+
+struct LLMClientProviderContent: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+    
+    let logger = Logger(label: "LLMClientProvider")
+    var llmClient: LLMClient
+    var state: LLMStatable
+    
+    @State private var refreshCreditsPassthrough = PassthroughSubject<Void, Never>()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.llmClient, llmClient)
+            .onReceive(llmClient.creditsUpdatePublisher) { credits in
+                logger.info("Credits updated: \(credits)")
+                state.updateCredits(credits)
+            }
+            .onReceive(llmClient.authStateChangedPublisher) { isAuthenticated in
+                state.isAuthenticated = isAuthenticated
+            }
+            .onReceive(refreshCreditsPassthrough.throttle(for: 30.0, scheduler: RunLoop.main, latest: true)) { _ in
+                Task {
+                    if let credits = try? await llmClient.getCredits() {
+                        state.updateCredits(credits)
+                    }
+                }
+            }
+            .onChange(of: scenePhase) { newValue in
+                if newValue == .active {
+                    refreshCreditsPassthrough.send()
+                }
+            }
     }
 }
 
