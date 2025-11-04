@@ -214,11 +214,11 @@ struct LLMClientProviderContent: ViewModifier {
 
 extension View {
     @available(iOS 17.0, macOS 14.0, watchOS 10.0, tvOS 17.0, *)
-    public func llmProvider(client: LLMClient, persistenceProvider: PersistenceProvider?) -> some View {
-        modifier(LLMClientProvider.modern(llmClient: client, persistenceProvider: persistenceProvider))
+    public func llmProvider(state: LLMState? = nil, client: LLMClient, persistenceProvider: PersistenceProvider?) -> some View {
+        modifier(LLMClientProvider.modern(state: state, llmClient: client, persistenceProvider: persistenceProvider))
     }
-    public func llmProviderLagacy(client: LLMClient, persistenceProvider: PersistenceProvider?) -> some View {
-        modifier(LLMClientProvider.lagacy(llmClient: client, persistenceProvider: persistenceProvider))
+    public func llmProviderLagacy(state: LLMStateObject? = nil, client: LLMClient, persistenceProvider: PersistenceProvider?) -> some View {
+        modifier(LLMClientProvider.lagacy(state: state, llmClient: client, persistenceProvider: persistenceProvider))
     }
 }
 
