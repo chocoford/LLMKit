@@ -22,6 +22,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/chocoford/LLMCore.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
+        .package(url: "https://github.com/chocoford/ChocofordKit.git", branch: "main"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -31,6 +32,7 @@ let package = Package(
             dependencies: [
                 .product(name: "LLMCore", package: "LLMCore"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "ChocoforodEssentials", package: "ChocoforodEssentials"),
             ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
