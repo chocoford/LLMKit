@@ -258,7 +258,7 @@ public final class LLMStateObject: ObservableObject, LLMStatable {
     var llmClient: LLMClient
     var persistenceProvider: (any PersistenceProvider)?
     
-    init(llmClient: LLMClient, persistenceProvider: PersistenceProvider?) {
+    public init(llmClient: LLMClient, persistenceProvider: PersistenceProvider?) {
         self.llmClient = llmClient
         self.persistenceProvider = persistenceProvider
     }
@@ -296,7 +296,7 @@ public final class LLMState: LLMStatable {
     var llmClient: LLMClient
     var persistenceProvider: (any PersistenceProvider)?
     
-    init(llmClient: LLMClient, persistenceProvider: PersistenceProvider?) {
+    public init(llmClient: LLMClient, persistenceProvider: PersistenceProvider?) {
         self.llmClient = llmClient
         self.persistenceProvider = persistenceProvider
     }
