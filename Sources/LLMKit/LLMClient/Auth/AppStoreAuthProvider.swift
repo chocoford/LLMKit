@@ -39,22 +39,10 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
                     let productID = transaction.productID
                     logger.info("Found existing entitlement for product: \(productID), originalID: \(transaction.originalID)")
                     
-                    // 这里你可以触发 register / add credits
-                    struct RestoreResponse: Codable {
-                        let token: String
-                    }
-
-                    let req = IAPAuthRequest(
-                        jws: result.jwsRepresentation,
-                        bundleID: bundleID,
-                        ascAppID: ascAppID
-                    )
-                    let data: RestoreResponse = try await networking.post("/auth/iap", body: req)
-                    
-                    // 调后端 /auth/restore
-                    return data.token
+                    return try await restoreAuth(productID: productID, result: result)
                 }
             }
+            
             throw NSError(
                 domain: "LLMAuth",
                 code: 401,
@@ -75,32 +63,33 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
                    transaction.subscriptionGroupID == groupID {
                     let productID = transaction.productID
                     logger.info("Found existing entitlement for product: \(productID), originalID: \(transaction.originalID)")
-                    
-                    // 这里你可以触发 register / add credits
-                    struct RestoreResponse: Codable {
-                        let token: String
-                    }
-
-                    let req = IAPAuthRequest(
-                        jws: result.jwsRepresentation,
-                        bundleID: bundleID,
-                        ascAppID: ascAppID
+                    return try await restoreAuth(
+                        productID: productID,
+                        result: result
                     )
-                    let data: RestoreResponse = try await networking.post("/auth/iap", body: req)
-                    
-                    // 调后端 /auth/restore
-                    return data.token
                 }
             }
-            throw NSError(
-                domain: "LLMAuth",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "No entitlement found"]
-            )
+            
+            return try await AnonAuthProvider(networking: self.networking).anonAuth()
         } catch {
             logger.error("Restore auth error: \(error.localizedDescription)")
             throw error
         }
+    }
+    
+    private func restoreAuth(
+        productID: String,
+        result: VerificationResult<Transaction>
+    ) async throws -> String {
+        struct RestoreResponse: Codable { let token: String }
+        let req = IAPAuthRequest(
+            jws: result.jwsRepresentation,
+            bundleID: bundleID,
+            ascAppID: ascAppID
+        )
+        let data: RestoreResponse = try await networking.post("/auth/iap", body: req)
+        
+        return data.token
     }
 
     public func handlePurchase(transactionJWS: String) async throws -> CreditAddResponse {
@@ -121,7 +110,7 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
                 for await update in Transaction.updates {
                     if case .verified(let transaction) = update,
                        productIDs.contains(transaction.productID) {
-                        let productID = transaction.productID
+                        // let productID = transaction.productID
                         
                         if #available(iOS 17.0, macOS 14.0, *) {
                             logger.info("""

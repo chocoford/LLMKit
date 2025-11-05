@@ -32,7 +32,7 @@ let package = Package(
             dependencies: [
                 .product(name: "LLMCore", package: "LLMCore"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "ChocoforodEssentials", package: "ChocoforodEssentials"),
+                .product(name: "ChocofordEssentials", package: "ChocofordKit"),
             ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
