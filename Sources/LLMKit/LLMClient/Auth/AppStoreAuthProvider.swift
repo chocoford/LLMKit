@@ -43,11 +43,7 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
                 }
             }
             
-            throw NSError(
-                domain: "LLMAuth",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "No entitlement found"]
-            )
+            return try await AnonAuthProvider(networking: self.networking).anonAuth(bundleID: bundleID)
         } catch {
             logger.error("Restore auth error: \(error.localizedDescription)")
             throw error
@@ -70,7 +66,7 @@ public struct AppStoreAuthProvider: LLMAuthProvider {
                 }
             }
             
-            return try await AnonAuthProvider(networking: self.networking).anonAuth()
+            return try await AnonAuthProvider(networking: self.networking).anonAuth(bundleID: bundleID)
         } catch {
             logger.error("Restore auth error: \(error.localizedDescription)")
             throw error

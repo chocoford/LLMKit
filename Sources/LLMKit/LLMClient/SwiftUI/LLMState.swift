@@ -19,6 +19,8 @@ public enum ConversationPhase: String, Codable, Sendable {
 
 public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var id: String = UUID().uuidString
+    
+    public var type: String
     public var title: String
     public var messages: [ChatMessage] = []
     public var phase: ConversationPhase = .idle
@@ -28,12 +30,14 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     
     public init(
         id: String = UUID().uuidString,
+        type: String,
         title: String,
         messages: [ChatMessage] = [],
         createdAt: Date,
         lastChatAt: Date,
     ) {
         self.id = id
+        self.type = type
         self.title = title
         self.messages = messages
         self.createdAt = createdAt
@@ -61,6 +65,7 @@ protocol LLMStatable: AnyObject {
     
     func sendMessage(
         to conversationID: String,
+        type: String,
         model: SupportedModel,
         message: ChatMessage,
         stream: Bool,
@@ -81,6 +86,7 @@ extension LLMStatable {
     
     func _sendMessage(
         to conversationID: String,
+        type: String = "default",
         model: SupportedModel,
         message: ChatMessage,
         stream: Bool = true,
@@ -91,6 +97,7 @@ extension LLMStatable {
         if !conversations.value!.contains(where: {$0.id == conversationID}) {
             let newConversation: Conversation = .init(
                 id: conversationID,
+                type: type,
                 title: "New conversation",
                 createdAt: .now,
                 lastChatAt: .now
@@ -104,7 +111,7 @@ extension LLMStatable {
         }
         
         guard let index = self.conversations.value?.firstIndex(where: { $0.id == conversationID }) else { return }
-        
+
         await MainActor.run {
             self.conversations.transform {
                 $0[index].messages.append(message)
@@ -271,12 +278,27 @@ public final class LLMStateObject: ObservableObject, LLMStatable {
     
     public func sendMessage(
         to conversationID: String,
+        type: String,
         model: SupportedModel,
         message: ChatMessage,
         stream: Bool = true
     ) async throws {
-        try await self._sendMessage(to: conversationID, model: model, message: message, stream: stream)
+        try await self._sendMessage(
+            to: conversationID,
+            type: type,
+            model: model,
+            message: message,
+            stream: stream
+        )
     }
+    
+//    public func sendMessage(
+//        model: SupportedModel,
+//        message: ChatMessage
+//    ) -> AsyncThrowingStream<> {
+//        let conversationID = UUID()
+//        try await self._sendMessage(to: conversationID, model: model, message: message, stream: true)
+//    }
     
     public func refreshConversations() async {
         await self._refreshConversations()
@@ -301,18 +323,24 @@ public final class LLMState: LLMStatable {
         self.persistenceProvider = persistenceProvider
     }
     
-    
     public internal(set) var isAuthenticated: Bool = false
     public internal(set) var conversations: Loadable<[Conversation]> = .notRequested
     public internal(set) var credits: Double = 0
     
     public func sendMessage(
         to conversationID: String,
+        type: String,
         model: SupportedModel,
         message: ChatMessage,
         stream: Bool = true
     ) async throws {
-        try await self._sendMessage(to: conversationID, model: model, message: message, stream: stream)
+        try await self._sendMessage(
+            to: conversationID,
+            type: type,
+            model: model,
+            message: message,
+            stream: stream
+        )
     }
     
     public func refreshConversations() async {
