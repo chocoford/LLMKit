@@ -72,6 +72,15 @@ public actor LLMNetworking {
         try validate(response: response, data: data)
         return try decode(U.self, from: data)
     }
+
+    public func delete<T: Encodable>(
+        _ endpoint: String,
+        body: T
+    ) async throws {
+        let request = try makeRequest(endpoint: endpoint, method: "DELETE", body: body)
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+    }
     
     // MARK: - 新增: 流式请求
     public func stream<T: Encodable>(
