@@ -5,7 +5,7 @@ import Testing
 
 @Suite("BYOK request isolation")
 struct LLMBYOKTests {
-    private let credentials = LLMBYOKCredentials(provider: .openRouter, apiKey: "test-user-key")
+    private let credentials = LLMBYOKCredentials(configuration: .openRouter, apiKey: "test-user-key")
 
     @Test("Keys travel in headers, never in the body, and don't replace app authentication")
     func credentialsStayOutOfBody() async throws {
@@ -15,7 +15,8 @@ struct LLMBYOKTests {
             endpoint: "/chat", method: "POST", body: ["prompt": "hello"], credentials: credentials
         )
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer app-login-token")
-        #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Provider") == "openrouter")
+        #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Provider") == nil)
+        #expect(try configuration(in: request) == .openRouter)
         #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == "test-user-key")
         #expect(request.url?.path == "/chat/byok")
         #expect(request.value(forHTTPHeaderField: "Cache-Control") == "no-store")
@@ -27,8 +28,10 @@ struct LLMBYOKTests {
             endpoint: "/tools/web-search", method: "POST", body: ["arguments": "hello"]
         )
         #expect(toolRequest.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == nil)
+        #expect(toolRequest.value(forHTTPHeaderField: "X-LLM-BYOK-Configuration") == nil)
         let platformRequest = try await networking.makeRequest(endpoint: "/chat", method: "POST", body: ["prompt": "next"])
         #expect(platformRequest.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == nil)
+        #expect(platformRequest.value(forHTTPHeaderField: "X-LLM-BYOK-Configuration") == nil)
     }
 
     @Test("Only model endpoints can receive credentials", arguments: ["/auth/iap", "/tools/web-search", "/upload/r2-presign"])
@@ -52,7 +55,7 @@ struct LLMBYOKTests {
     func rejectInvalidKeys(key: String) throws {
         var request = URLRequest(url: URL(string: "https://llm.chocoford.com/chat/byok")!)
         request.httpMethod = "POST"
-        let invalid = LLMBYOKCredentials(provider: .openRouter, apiKey: key)
+        let invalid = LLMBYOKCredentials(configuration: .openRouter, apiKey: key)
         #expect(throws: LLMBYOKConfigurationError.self) { try invalid.apply(to: &request) }
     }
 
@@ -73,15 +76,15 @@ struct LLMBYOKTests {
         #expect(!String(reflecting: credentials).contains("test-user-key"))
     }
 
-    @Test("Each supported provider travels separately from the app JWT", arguments: LLMBYOKProvider.allCases)
-    func providerHeaders(provider: LLMBYOKProvider) async throws {
+    @Test("Each preset is just a connection configuration", arguments: LLMBYOKPreset.allCases)
+    func providerHeaders(provider: LLMBYOKPreset) async throws {
         let networking = LLMNetworking()
         await networking.setToken("app-token")
         let request = try await networking.makeRequest(
             endpoint: "/chat", method: "POST", body: ["prompt": "hello"],
-            credentials: .init(provider: provider, apiKey: "synthetic-provider-key")
+            credentials: .init(configuration: provider.configuration, apiKey: "synthetic-provider-key")
         )
-        #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Provider") == provider.rawValue)
+        #expect(try configuration(in: request) == provider.configuration)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer app-token")
         #expect(!String(decoding: request.httpBody ?? Data(), as: UTF8.self).contains("synthetic-provider-key"))
     }
@@ -90,15 +93,15 @@ struct LLMBYOKTests {
     func modelAwareCredentials() async throws {
         let client = LLMClient(authProvider: NoAuthProvider(), byokModelCredentialsProvider: { model in
             switch model {
-            case .gpt4o: return .init(provider: .openAI, apiKey: "openai-test-key")
-            case .claudeSonnet4_6: return .init(provider: .anthropic, apiKey: "anthropic-test-key")
-            case .gemini3FlashPreview: return .init(provider: .gemini, apiKey: "gemini-test-key")
+            case .gpt4o: return .init(configuration: .openAI, apiKey: "openai-test-key")
+            case .claudeSonnet4_6: return .init(configuration: .anthropic, apiKey: "anthropic-test-key")
+            case .gemini3FlashPreview: return .init(configuration: .gemini, apiKey: "gemini-test-key")
             default: throw LLMBYOKConfigurationError.invalidAPIKey
             }
         })
-        #expect(try await client.inferenceCredentials(for: .gpt4o)?.provider == .openAI)
-        #expect(try await client.inferenceCredentials(for: .claudeSonnet4_6)?.provider == .anthropic)
-        #expect(try await client.inferenceCredentials(for: .gemini3FlashPreview)?.provider == .gemini)
+        #expect(try await client.inferenceCredentials(for: .gpt4o)?.configuration == .openAI)
+        #expect(try await client.inferenceCredentials(for: .claudeSonnet4_6)?.configuration == .anthropic)
+        #expect(try await client.inferenceCredentials(for: .gemini3FlashPreview)?.configuration == .gemini)
         do {
             _ = try await client.inferenceCredentials(for: .gpt35Turbo)
             Issue.record("A missing BYOK key must throw, not return platform mode")
@@ -113,6 +116,32 @@ struct LLMBYOKTests {
             byokModelCredentialsProvider: { _ in nil }
         )
         #expect(try await client.inferenceCredentials(for: .gpt4o) == nil)
+    }
+
+    @Test("A custom connection uses the same BYOK provider and never serializes its key")
+    func customConfiguredProvider() async throws {
+        let custom = LLMBYOKConfiguration(
+            baseURL: URL(string: "https://gateway.example.com/v1/")!,
+            defaultModel: "custom-model",
+            modelMapping: .init(aliases: ["logical-model": "custom-model"])
+        )
+        let provider = LLMBYOKProvider(configuration: custom) { "custom-secret-key" }
+        let client = LLMClient(authProvider: NoAuthProvider(), byokProvider: provider)
+        let credentials = try #require(try await client.inferenceCredentials(for: .other("logical-model")))
+        let request = try await LLMNetworking().makeRequest(
+            endpoint: "/chat", method: "POST", body: ["model": "logical-model"], credentials: credentials
+        )
+        #expect(try configuration(in: request) == custom)
+        #expect(request.url?.host != custom.baseURL.host) // Always sent to our backend.
+        #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == "custom-secret-key")
+        #expect(!String(decoding: try JSONEncoder().encode(custom), as: UTF8.self).contains("custom-secret-key"))
+        #expect(!String(reflecting: provider).contains("custom-secret-key"))
+    }
+
+    private func configuration(in request: URLRequest) throws -> LLMBYOKConfiguration {
+        let encoded = try #require(request.value(forHTTPHeaderField: "X-LLM-BYOK-Configuration"))
+        let data = try #require(Data(base64Encoded: encoded))
+        return try JSONDecoder().decode(LLMBYOKConfiguration.self, from: data)
     }
 
     @Test("An SSE error is thrown even after HTTP 200")

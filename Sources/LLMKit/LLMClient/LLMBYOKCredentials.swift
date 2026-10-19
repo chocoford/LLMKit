@@ -1,27 +1,31 @@
 import Foundation
+import LLMCore
 
-/// A provider whose API key can be used by LLMServer for a model request.
-public enum LLMBYOKProvider: String, CaseIterable, Sendable {
-    case openRouter = "openrouter"
-    case openAI = "openai"
-    case anthropic
-    case gemini
-}
+public typealias LLMBYOKConfiguration = LLMCore.LLMBYOKConfiguration
+public typealias LLMBYOKPreset = LLMCore.LLMBYOKPreset
 
 /// Request-only credentials. This type deliberately does not conform to Codable.
 ///
 /// The host app owns persistence (for example, Keychain). LLMKit sends these credentials
 /// only to LLMServer's chat endpoints; it never saves them in conversations or metadata.
 public struct LLMBYOKCredentials: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
-    public let provider: LLMBYOKProvider
+    public let configuration: LLMBYOKConfiguration
     private let apiKey: String
 
-    public init(provider: LLMBYOKProvider, apiKey: String) {
-        self.provider = provider
+    public init(configuration: LLMBYOKConfiguration, apiKey: String) {
+        self.configuration = configuration
         self.apiKey = apiKey
     }
 
-    public var description: String { "LLMBYOKCredentials(provider: \(provider.rawValue), apiKey: <redacted>)" }
+    @available(*, deprecated, message: "Use init(configuration:apiKey:); providers are connection presets now.")
+    public init(provider: LLMBYOKPreset, apiKey: String) {
+        self.init(configuration: provider.configuration, apiKey: apiKey)
+    }
+
+    @available(*, deprecated, message: "Use configuration; a custom connection need not have a preset.")
+    public var provider: LLMBYOKPreset? { configuration.preset }
+
+    public var description: String { "LLMBYOKCredentials(configuration: \(configuration.preset?.rawValue ?? "custom"), apiKey: <redacted>)" }
     public var debugDescription: String { description }
 
     func apply(to request: inout URLRequest) throws {
@@ -35,6 +39,7 @@ public struct LLMBYOKCredentials: Sendable, CustomStringConvertible, CustomDebug
                 || (url.scheme?.lowercased() == "http" && isLoopback) else {
             throw LLMBYOKConfigurationError.insecureConnection
         }
+        try configuration.validate()
 
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty,
@@ -42,7 +47,9 @@ public struct LLMBYOKCredentials: Sendable, CustomStringConvertible, CustomDebug
               key.utf8.allSatisfy({ (33...126).contains($0) }) else {
             throw LLMBYOKConfigurationError.invalidAPIKey
         }
-        request.setValue(provider.rawValue, forHTTPHeaderField: "X-LLM-BYOK-Provider")
+        let data = try JSONEncoder().encode(configuration)
+        request.setValue(data.base64EncodedString(), forHTTPHeaderField: "X-LLM-BYOK-Configuration")
+        request.setValue(nil, forHTTPHeaderField: "X-LLM-BYOK-Provider")
         request.setValue(key, forHTTPHeaderField: "X-LLM-BYOK-Key")
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")

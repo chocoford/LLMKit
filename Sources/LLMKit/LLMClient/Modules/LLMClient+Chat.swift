@@ -109,7 +109,9 @@ extension LLMClient {
         text: String
     ) async throws -> APIResponse<ChatMessageContent> {
         let credentials = try await inferenceCredentials(for: preferredModel)
-        let model = credentials == nil || credentials?.provider == .openRouter ? platformModel : preferredModel
+        let model = credentials.map { credentials in
+            credentials.configuration.options.auxiliaryModel.map(SupportedModel.init(rawValue:)) ?? preferredModel
+        } ?? platformModel
         let messages = [ChatMessageContent(role: .system, content: system), .init(role: .user, content: text)]
         return try await networking.postInference(
             "/chat", body: ChatRequest<EmptyMetadata>(model: model, messages: messages), credentials: credentials
