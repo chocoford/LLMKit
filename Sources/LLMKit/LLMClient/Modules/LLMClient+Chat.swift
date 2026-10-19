@@ -27,7 +27,8 @@ extension LLMClient {
             .init(role: .user, content: text)
         ])
 
-        return try await networking.post(
+        let credentials = try await byokCredentialsProvider?()
+        return try await networking.postInference(
             "/chat",
             body: ChatRequest(
                 model: model,
@@ -35,7 +36,8 @@ extension LLMClient {
                 metadata: metadata,
                 agentID: agentID,
                 tools: tools
-            )
+            ),
+            credentials: credentials
         )
     }
 
@@ -48,9 +50,11 @@ extension LLMClient {
     ) async throws -> APIResponse<ChatMessageContent> {
         let preparedMessages = try await prepareUploadFiles(for: messages)
 
-        return try await networking.post(
+        let credentials = try await byokCredentialsProvider?()
+        return try await networking.postInference(
             "/chat",
-            body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools)
+            body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools),
+            credentials: credentials
         )
     }
 
@@ -70,13 +74,14 @@ extension LLMClient {
             .init(role: .user, content: text)
         ])
 
-        return try await networking.stream("/chat/stream", body: ChatRequest(
+        let credentials = try await byokCredentialsProvider?()
+        return try await networking.streamInference("/chat/stream", body: ChatRequest(
             model: model,
             messages: preparedMessages,
             metadata: metadata,
             agentID: agentID,
             tools: tools
-        ))
+        ), credentials: credentials)
     }
 
     public func streamChat<Metadata: Codable & Equatable & Sendable>(
@@ -88,7 +93,12 @@ extension LLMClient {
     ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
         let preparedMessages = try await prepareUploadFiles(for: messages)
 
-        return try await networking.stream("/chat/stream", body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools))
+        let credentials = try await byokCredentialsProvider?()
+        return try await networking.streamInference(
+            "/chat/stream",
+            body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools),
+            credentials: credentials
+        )
     }
     
 //    public func streamChat(

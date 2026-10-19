@@ -73,6 +73,18 @@ public actor LLMNetworking {
         return try decode(U.self, from: data)
     }
 
+    func postInference<T: Encodable, U: Decodable>(
+        _ endpoint: String,
+        body: T,
+        credentials: LLMBYOKCredentials?
+    ) async throws -> U {
+        let request = try makeRequest(endpoint: endpoint, method: "POST", body: body, credentials: credentials)
+        let delegate: (any URLSessionTaskDelegate)? = credentials == nil ? nil : LLMBYOKRedirectDelegate()
+        let (data, response) = try await session.data(for: request, delegate: delegate)
+        try validate(response: response, data: data)
+        return try decode(U.self, from: data)
+    }
+
     public func delete<T: Encodable>(
         _ endpoint: String,
         body: T
@@ -88,11 +100,25 @@ public actor LLMNetworking {
         body: T
     ) throws -> AsyncThrowingStream<StreamChatResponse, Error> {
         let request = try makeRequest(endpoint: endpoint, method: "POST", body: body)
-        
+        return responseStream(for: request)
+    }
+
+    func streamInference<T: Encodable>(
+        _ endpoint: String,
+        body: T,
+        credentials: LLMBYOKCredentials?
+    ) throws -> AsyncThrowingStream<StreamChatResponse, Error> {
+        let request = try makeRequest(endpoint: endpoint, method: "POST", body: body, credentials: credentials)
+        return responseStream(for: request)
+    }
+
+    private func responseStream(for request: URLRequest) -> AsyncThrowingStream<StreamChatResponse, Error> {
         return AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
-                    let (bytes, response) = try await session.bytes(for: request)
+                    let delegate: (any URLSessionTaskDelegate)? = request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == nil
+                        ? nil : LLMBYOKRedirectDelegate()
+                    let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
                     if let http = response as? HTTPURLResponse,
                        !(200..<300).contains(http.statusCode) {
                         // 非 2xx: 把 body 收完(错误响应通常很短的 JSON)再抛 LLMError,
@@ -118,6 +144,9 @@ public actor LLMNetworking {
                             // 尝试解码成目标类型
                             if !jsonPart.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                                 let data = jsonPart.data(using: .utf8) {
+                                if let failure = try? JSONDecoder().decode(LLMStreamErrorEnvelope.self, from: data) {
+                                    throw LLMError.fromHTTP(statusCode: failure.error.code, body: data)
+                                }
                                 do {
                                     let decoded = try JSONDecoder().decode(StreamChatResponse.self, from: data)
                                     continuation.yield(decoded)
@@ -163,12 +192,24 @@ public actor LLMNetworking {
     }
 
     
-    private func makeRequest<T: Encodable>(
+    func makeRequest<T: Encodable>(
         endpoint: String,
         method: String,
         body: T? = nil,
+        credentials: LLMBYOKCredentials? = nil
     ) throws -> URLRequest {
-        guard let url = URL(string: endpoint, relativeTo: baseURL) else {
+        let resolvedEndpoint: String
+        if credentials != nil {
+            // An old server must return 404, never ignore the headers and bill its own key.
+            let byokEndpoints = ["/chat": "/chat/byok", "/chat/stream": "/chat/byok/stream", "/chat/ask": "/chat/byok/ask"]
+            guard let byokEndpoint = byokEndpoints[endpoint] else {
+                throw LLMBYOKConfigurationError.unsupportedEndpoint
+            }
+            resolvedEndpoint = byokEndpoint
+        } else {
+            resolvedEndpoint = endpoint
+        }
+        guard let url = URL(string: resolvedEndpoint, relativeTo: baseURL) else {
             throw URLError(.badURL)
         }
         var request = URLRequest(url: url)
@@ -182,6 +223,7 @@ public actor LLMNetworking {
         if let body = body {
             request.httpBody = try JSONEncoder().encode(body)
         }
+        try credentials?.apply(to: &request)
         return request
     }
 
@@ -190,5 +232,35 @@ public actor LLMNetworking {
         if !(200..<300).contains(http.statusCode) {
             throw LLMError.fromHTTP(statusCode: http.statusCode, body: data)
         }
+    }
+}
+
+private struct LLMStreamErrorEnvelope: Decodable {
+    struct Failure: Decodable {
+        let code: Int
+        let message: String
+    }
+    let error: Failure
+}
+
+/// Never forward a user's credential to a redirect destination.
+private final class LLMBYOKRedirectDelegate: NSObject, URLSessionDataDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        willCacheResponse proposedResponse: CachedURLResponse,
+        completionHandler: @escaping @Sendable (CachedURLResponse?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

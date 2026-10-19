@@ -15,13 +15,15 @@ public final class LLMClient: Sendable {
     internal let networking: LLMNetworking
     internal let uploader: (any LLMFileUploadProvider)?
     internal let uploadPolicy: LLMUploadPolicy?
+    internal let byokCredentialsProvider: LLMBYOKCredentialsProvider?
     
     private let logger = Logger(label: "LLMClient")
     
     public init(
         authProvider: LLMAuthProvider,
         uploadProvider: (any LLMFileUploadProvider)? = nil,
-        uploadPolicy: LLMUploadPolicy? = nil
+        uploadPolicy: LLMUploadPolicy? = nil,
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -31,6 +33,7 @@ public final class LLMClient: Sendable {
         self.authStateChangedPublisher = authStateChangedPublisher
         self.uploader = uploadProvider
         self.uploadPolicy = uploadPolicy
+        self.byokCredentialsProvider = byokCredentialsProvider
     }
 
     #if DEBUG
@@ -38,7 +41,8 @@ public final class LLMClient: Sendable {
         authProvider: LLMAuthProvider,
         uploadProvider: (any LLMFileUploadProvider)? = nil,
         uploadPolicy: LLMUploadPolicy? = nil,
-        baseURL: URL
+        baseURL: URL,
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking(baseURL: baseURL)
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -48,13 +52,15 @@ public final class LLMClient: Sendable {
         self.authStateChangedPublisher = authStateChangedPublisher
         self.uploader = uploadProvider
         self.uploadPolicy = uploadPolicy
+        self.byokCredentialsProvider = byokCredentialsProvider
     }
     #endif
     
     public init(
         authProvider: any LLMAuthProviderBuilder,
         uploadProvider: (any LLMFileUploadProviderBuilder)? = nil,
-        uploadPolicy: LLMUploadPolicy? = nil
+        uploadPolicy: LLMUploadPolicy? = nil,
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -66,6 +72,7 @@ public final class LLMClient: Sendable {
         self.authStateChangedPublisher = authStateChangedPublisher
         self.uploader = uploadProvider?(self.networking)
         self.uploadPolicy = uploadPolicy
+        self.byokCredentialsProvider = byokCredentialsProvider
     }
 
     #if DEBUG
@@ -73,7 +80,8 @@ public final class LLMClient: Sendable {
         authProvider: any LLMAuthProviderBuilder,
         uploadProvider: (any LLMFileUploadProviderBuilder)? = nil,
         uploadPolicy: LLMUploadPolicy? = nil,
-        baseURL: URL
+        baseURL: URL,
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking(baseURL: baseURL)
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -85,6 +93,7 @@ public final class LLMClient: Sendable {
         self.authStateChangedPublisher = authStateChangedPublisher
         self.uploader = uploadProvider?(self.networking)
         self.uploadPolicy = uploadPolicy
+        self.byokCredentialsProvider = byokCredentialsProvider
     }
     #endif
     
@@ -97,6 +106,7 @@ public final class LLMClient: Sendable {
         self.authStateChangedPublisher = authStateChangedPublisher
         self.uploader = nil
         self.uploadPolicy = nil
+        self.byokCredentialsProvider = nil
     }
     
     internal let authStateChangedPublisher: PassthroughSubject<Bool, Never>
@@ -162,7 +172,10 @@ public final class LLMClient: Sendable {
         model: SupportedModel = .gpt4oMini
     ) async throws -> APIResponse<ChatMessageContent> {
         let body = AskRequest<EmptyMetadata>(prompt: prompt, model: model)
-        let response: APIResponse<ChatMessageContent> = try await self.networking.post("/chat/ask", body: body)
+        let credentials = try await byokCredentialsProvider?()
+        let response: APIResponse<ChatMessageContent> = try await self.networking.postInference(
+            "/chat/ask", body: body, credentials: credentials
+        )
 
         return withUsageMiddleware(response)
     }
