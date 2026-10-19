@@ -82,8 +82,11 @@ silently returning nil.
 - Invalid credentials, provider failures and interrupted streams return errors. They never
   switch automatically to the platform key. Provider auth/balance errors use HTTP 502
   with a BYOK-specific message, rather than triggering platform login or recharge flows.
+- BYOK streaming succeeds only after a complete server `[DONE]` frame. Premature EOF or
+  malformed SSE/UTF-8/JSON/response data throws, even if some text or tool arguments have
+  already been received. Platform streaming keeps its existing EOF compatibility.
 
-Deploy the BYOK-capable LLMServer before enabling this SDK option. Existing Domain Agent
+Deploy LLMServer with BYOK completion-marker support before enabling this SDK option. Existing Domain Agent
 model allowlists and plan requirements still apply; BYOK does not bypass product access.
 If your App disables its send button when platform credits are depleted, adjust that UI
 condition for BYOK inference. Tool calls can still require platform credits.

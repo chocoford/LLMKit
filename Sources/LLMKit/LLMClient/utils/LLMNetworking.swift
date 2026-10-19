@@ -116,8 +116,8 @@ public actor LLMNetworking {
         return AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
-                    let delegate: (any URLSessionTaskDelegate)? = request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == nil
-                        ? nil : LLMBYOKRedirectDelegate()
+                    let usesBYOK = request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") != nil
+                    let delegate: (any URLSessionTaskDelegate)? = usesBYOK ? LLMBYOKRedirectDelegate() : nil
                     let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
                     if let http = response as? HTTPURLResponse,
                        !(200..<300).contains(http.statusCode) {
@@ -132,6 +132,21 @@ public actor LLMNetworking {
                         throw LLMError.fromHTTP(statusCode: http.statusCode, body: bodyData)
                     }
 
+                    if usesBYOK {
+                        var decoder = LLMBYOKStreamDecoder<StreamChatResponse>()
+                        for try await byte in bytes {
+                            if let decoded = try decoder.append(byte) {
+                                continuation.yield(decoded)
+                            }
+                            if decoder.isComplete { break }
+                        }
+                        try Task.checkCancellation()
+                        try decoder.validateEnd()
+                        continuation.finish()
+                        return
+                    }
+
+                    // Preserve the existing EOF/decode tolerance for platform-billed streams.
                     for try await line in bytes.lines {
                         // print("Received line: \(line)")
                         if line.hasPrefix("data: ") {
@@ -233,14 +248,6 @@ public actor LLMNetworking {
             throw LLMError.fromHTTP(statusCode: http.statusCode, body: data)
         }
     }
-}
-
-private struct LLMStreamErrorEnvelope: Decodable {
-    struct Failure: Decodable {
-        let code: Int
-        let message: String
-    }
-    let error: Failure
 }
 
 /// Never forward a user's credential to a redirect destination.
