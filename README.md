@@ -36,9 +36,16 @@ struct MyApp: App {
 
 ## BYOK through LLMServer
 
-BYOK currently supports a user's own **OpenRouter API key**. Requests still go through
+BYOK supports **OpenRouter, OpenAI, Anthropic and Google Gemini API keys**. Requests still go through
 LLMServer, which retains app authentication, Domain Agent prompts, model/plan validation,
 tool policy and the normal chat/SSE response format.
+
+First-party keys go directly from LLMServer to that provider's official API, not through
+OpenRouter. Chat, vision inputs and native function-tool rounds use the providers' official
+Chat Completions-compatible endpoints. Native image generation, Vertex AI / Azure variants,
+arbitrary custom base URLs and provider-specific audio/video APIs are not part of this adapter.
+Native image models (including Nano Banana) remain OpenRouter-only on this chat route.
+Provider/model mismatches are rejected; no model or credential fallback is performed.
 
 The host app owns key storage. Supply a callback that reads the key from your Keychain
 implementation; LLMKit calls it for each model request and does not persist its result:
@@ -59,9 +66,38 @@ func makeBYOKClient(
 }
 ```
 
+For multiple first-party keys, use `byokModelCredentialsProvider` instead. It receives the
+requested `SupportedModel` and takes precedence over the zero-argument callback:
+
+```swift
+func makeMultiProviderClient(
+    readAPIKey: @escaping @Sendable (LLMBYOKProvider) async throws -> String
+) -> LLMClient {
+    LLMClient(
+        authProvider: .xcode(bundleID: "com.example.app"),
+        byokModelCredentialsProvider: { model in
+            if model.isImageModel {
+                return LLMBYOKCredentials(provider: .openRouter, apiKey: try await readAPIKey(.openRouter))
+            }
+            let provider: LLMBYOKProvider
+            switch model.provider {
+            case "OpenAI": provider = .openAI
+            case "Anthropic": provider = .anthropic
+            case "Google": provider = .gemini
+            default: throw LLMBYOKConfigurationError.invalidAPIKey
+            }
+            return LLMBYOKCredentials(provider: provider, apiKey: try await readAPIKey(provider))
+        }
+    )
+}
+```
+
 The callback also covers Agent rounds, `ask`, title generation, temporary chat and
-compaction. These auxiliary requests use their existing model selections and are billed
-to the user's provider account as well. Existing chat and state APIs need no changes.
+compaction. Titles use the conversation's model for a first-party key; platform/OpenRouter
+titles retain their existing inexpensive model. For `ask` and manual compaction, select a
+`model` / `summaryModel` that matches the key (their defaults are OpenAI models). Automatic
+overflow compaction already uses the conversation model. All these model requests are billed
+to the selected provider account. Existing chat and state APIs need no changes.
 If the callback is omitted, behavior remains platform-billed. A dynamic callback may
 return nil **only when the user explicitly selects platform billing**. If BYOK is selected
 but no key is available, throw `LLMBYOKConfigurationError.invalidAPIKey` instead of
@@ -86,12 +122,16 @@ silently returning nil.
   malformed SSE/UTF-8/JSON/response data throws, even if some text or tool arguments have
   already been received. Platform streaming keeps its existing EOF compatibility.
 
-Deploy LLMServer with BYOK completion-marker support before enabling this SDK option. Existing Domain Agent
+Update LLMCore in both LLMServer and the App/LLMKit first: the optional
+`ToolCall.providerMetadata` preserves Gemini thought signatures across tool rounds and saved
+conversations. Old tool-call JSON remains compatible, but an old client that discards that
+field cannot safely continue Gemini 3 tool rounds. Deploy the updated LLMServer before
+enabling first-party providers in the App. Existing Domain Agent
 model allowlists and plan requirements still apply; BYOK does not bypass product access.
 If your App disables its send button when platform credits are depleted, adjust that UI
 condition for BYOK inference. Tool calls can still require platform credits.
 The server deployment's proxies, tracing and error-reporting systems must also omit the
-`X-LLM-BYOK-Key` header from captured requests.
+inbound `X-LLM-BYOK-Key` and outbound provider `Authorization` headers from captured requests.
 
 ## Advanced Configuration (Multi-Window)
 

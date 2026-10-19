@@ -1,8 +1,11 @@
 import Foundation
 
 /// A provider whose API key can be used by LLMServer for a model request.
-public enum LLMBYOKProvider: String, Sendable {
+public enum LLMBYOKProvider: String, CaseIterable, Sendable {
     case openRouter = "openrouter"
+    case openAI = "openai"
+    case anthropic
+    case gemini
 }
 
 /// Request-only credentials. This type deliberately does not conform to Codable.

@@ -27,7 +27,7 @@ extension LLMClient {
             .init(role: .user, content: text)
         ])
 
-        let credentials = try await byokCredentialsProvider?()
+        let credentials = try await inferenceCredentials(for: model)
         return try await networking.postInference(
             "/chat",
             body: ChatRequest(
@@ -50,7 +50,7 @@ extension LLMClient {
     ) async throws -> APIResponse<ChatMessageContent> {
         let preparedMessages = try await prepareUploadFiles(for: messages)
 
-        let credentials = try await byokCredentialsProvider?()
+        let credentials = try await inferenceCredentials(for: model)
         return try await networking.postInference(
             "/chat",
             body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools),
@@ -74,7 +74,7 @@ extension LLMClient {
             .init(role: .user, content: text)
         ])
 
-        let credentials = try await byokCredentialsProvider?()
+        let credentials = try await inferenceCredentials(for: model)
         return try await networking.streamInference("/chat/stream", body: ChatRequest(
             model: model,
             messages: preparedMessages,
@@ -93,7 +93,7 @@ extension LLMClient {
     ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
         let preparedMessages = try await prepareUploadFiles(for: messages)
 
-        let credentials = try await byokCredentialsProvider?()
+        let credentials = try await inferenceCredentials(for: model)
         return try await networking.streamInference(
             "/chat/stream",
             body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools),
@@ -101,6 +101,21 @@ extension LLMClient {
         )
     }
     
+    /// Titles use the conversation's model in BYOK mode, not a hard-coded OpenAI model.
+    func auxiliaryChat(
+        preferredModel: SupportedModel,
+        platformModel: SupportedModel,
+        system: String,
+        text: String
+    ) async throws -> APIResponse<ChatMessageContent> {
+        let credentials = try await inferenceCredentials(for: preferredModel)
+        let model = credentials == nil || credentials?.provider == .openRouter ? platformModel : preferredModel
+        let messages = [ChatMessageContent(role: .system, content: system), .init(role: .user, content: text)]
+        return try await networking.postInference(
+            "/chat", body: ChatRequest<EmptyMetadata>(model: model, messages: messages), credentials: credentials
+        )
+    }
+
 //    public func streamChat(
 //        model: SupportedModel,
 //        messages: [ChatMessageContent],

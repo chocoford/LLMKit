@@ -73,6 +73,48 @@ struct LLMBYOKTests {
         #expect(!String(reflecting: credentials).contains("test-user-key"))
     }
 
+    @Test("Each supported provider travels separately from the app JWT", arguments: LLMBYOKProvider.allCases)
+    func providerHeaders(provider: LLMBYOKProvider) async throws {
+        let networking = LLMNetworking()
+        await networking.setToken("app-token")
+        let request = try await networking.makeRequest(
+            endpoint: "/chat", method: "POST", body: ["prompt": "hello"],
+            credentials: .init(provider: provider, apiKey: "synthetic-provider-key")
+        )
+        #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Provider") == provider.rawValue)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer app-token")
+        #expect(!String(decoding: request.httpBody ?? Data(), as: UTF8.self).contains("synthetic-provider-key"))
+    }
+
+    @Test("A model-aware callback selects first-party keys without platform fallback")
+    func modelAwareCredentials() async throws {
+        let client = LLMClient(authProvider: NoAuthProvider(), byokModelCredentialsProvider: { model in
+            switch model {
+            case .gpt4o: return .init(provider: .openAI, apiKey: "openai-test-key")
+            case .claudeSonnet4_6: return .init(provider: .anthropic, apiKey: "anthropic-test-key")
+            case .gemini3FlashPreview: return .init(provider: .gemini, apiKey: "gemini-test-key")
+            default: throw LLMBYOKConfigurationError.invalidAPIKey
+            }
+        })
+        #expect(try await client.inferenceCredentials(for: .gpt4o)?.provider == .openAI)
+        #expect(try await client.inferenceCredentials(for: .claudeSonnet4_6)?.provider == .anthropic)
+        #expect(try await client.inferenceCredentials(for: .gemini3FlashPreview)?.provider == .gemini)
+        do {
+            _ = try await client.inferenceCredentials(for: .gpt35Turbo)
+            Issue.record("A missing BYOK key must throw, not return platform mode")
+        } catch LLMBYOKConfigurationError.invalidAPIKey {}
+    }
+
+    @Test("An explicit platform selection does not consult the legacy key callback")
+    func modelCallbackTakesPrecedence() async throws {
+        let client = LLMClient(
+            authProvider: NoAuthProvider(),
+            byokCredentialsProvider: { throw LLMBYOKConfigurationError.invalidAPIKey },
+            byokModelCredentialsProvider: { _ in nil }
+        )
+        #expect(try await client.inferenceCredentials(for: .gpt4o) == nil)
+    }
+
     @Test("An SSE error is thrown even after HTTP 200")
     func streamFailureIsNotASuccessfulPartialAnswer() async throws {
         let configuration = URLSessionConfiguration.ephemeral

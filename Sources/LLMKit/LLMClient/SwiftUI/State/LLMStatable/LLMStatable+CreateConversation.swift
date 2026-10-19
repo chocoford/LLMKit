@@ -95,8 +95,9 @@ extension LLMStatable {
         if let firstUserMessage = messages.first, let content = firstUserMessage.content, !content.isEmpty {
             Task {
                 logger.info("Generating title for new conversation...")
-                let result = try await llmClient.chat(
-                    model: .gpt35Turbo,
+                let result = try await llmClient.auxiliaryChat(
+                    preferredModel: model,
+                    platformModel: .gpt35Turbo,
                     system: """
                     You are a conversation title generator. Generate a concise, descriptive title (3-8 words) based on the user's first message.
 

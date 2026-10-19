@@ -10,12 +10,16 @@ import Foundation
 import Logging
 import LLMCore
 
+/// Select credentials for each model request. Return nil only for explicitly selected platform billing.
+public typealias LLMBYOKModelCredentialsProvider = @Sendable (SupportedModel) async throws -> LLMBYOKCredentials?
+
 public final class LLMClient: Sendable {
     private let authManager: LLMAuthManager
     internal let networking: LLMNetworking
     internal let uploader: (any LLMFileUploadProvider)?
     internal let uploadPolicy: LLMUploadPolicy?
     internal let byokCredentialsProvider: LLMBYOKCredentialsProvider?
+    internal let byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider?
     
     private let logger = Logger(label: "LLMClient")
     
@@ -23,7 +27,8 @@ public final class LLMClient: Sendable {
         authProvider: LLMAuthProvider,
         uploadProvider: (any LLMFileUploadProvider)? = nil,
         uploadPolicy: LLMUploadPolicy? = nil,
-        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
+        byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -34,6 +39,7 @@ public final class LLMClient: Sendable {
         self.uploader = uploadProvider
         self.uploadPolicy = uploadPolicy
         self.byokCredentialsProvider = byokCredentialsProvider
+        self.byokModelCredentialsProvider = byokModelCredentialsProvider
     }
 
     #if DEBUG
@@ -42,7 +48,8 @@ public final class LLMClient: Sendable {
         uploadProvider: (any LLMFileUploadProvider)? = nil,
         uploadPolicy: LLMUploadPolicy? = nil,
         baseURL: URL,
-        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
+        byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking(baseURL: baseURL)
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -53,6 +60,7 @@ public final class LLMClient: Sendable {
         self.uploader = uploadProvider
         self.uploadPolicy = uploadPolicy
         self.byokCredentialsProvider = byokCredentialsProvider
+        self.byokModelCredentialsProvider = byokModelCredentialsProvider
     }
     #endif
     
@@ -60,7 +68,8 @@ public final class LLMClient: Sendable {
         authProvider: any LLMAuthProviderBuilder,
         uploadProvider: (any LLMFileUploadProviderBuilder)? = nil,
         uploadPolicy: LLMUploadPolicy? = nil,
-        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
+        byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -73,6 +82,7 @@ public final class LLMClient: Sendable {
         self.uploader = uploadProvider?(self.networking)
         self.uploadPolicy = uploadPolicy
         self.byokCredentialsProvider = byokCredentialsProvider
+        self.byokModelCredentialsProvider = byokModelCredentialsProvider
     }
 
     #if DEBUG
@@ -81,7 +91,8 @@ public final class LLMClient: Sendable {
         uploadProvider: (any LLMFileUploadProviderBuilder)? = nil,
         uploadPolicy: LLMUploadPolicy? = nil,
         baseURL: URL,
-        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil
+        byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
+        byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil
     ) {
         self.networking = LLMNetworking(baseURL: baseURL)
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -94,6 +105,7 @@ public final class LLMClient: Sendable {
         self.uploader = uploadProvider?(self.networking)
         self.uploadPolicy = uploadPolicy
         self.byokCredentialsProvider = byokCredentialsProvider
+        self.byokModelCredentialsProvider = byokModelCredentialsProvider
     }
     #endif
     
@@ -107,6 +119,7 @@ public final class LLMClient: Sendable {
         self.uploader = nil
         self.uploadPolicy = nil
         self.byokCredentialsProvider = nil
+        self.byokModelCredentialsProvider = nil
     }
     
     internal let authStateChangedPublisher: PassthroughSubject<Bool, Never>
@@ -172,12 +185,18 @@ public final class LLMClient: Sendable {
         model: SupportedModel = .gpt4oMini
     ) async throws -> APIResponse<ChatMessageContent> {
         let body = AskRequest<EmptyMetadata>(prompt: prompt, model: model)
-        let credentials = try await byokCredentialsProvider?()
+        let credentials = try await inferenceCredentials(for: model)
         let response: APIResponse<ChatMessageContent> = try await self.networking.postInference(
             "/chat/ask", body: body, credentials: credentials
         )
 
         return withUsageMiddleware(response)
+    }
+
+    func inferenceCredentials(for model: SupportedModel) async throws -> LLMBYOKCredentials? {
+        // A model-specific callback takes precedence, including an explicit nil (platform mode).
+        if let byokModelCredentialsProvider { return try await byokModelCredentialsProvider(model) }
+        return try await byokCredentialsProvider?()
     }
     
     // MARK: - Credits
