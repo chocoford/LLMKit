@@ -5,6 +5,18 @@ import Testing
 
 @Suite("Backend-mediated BYOK model discovery")
 struct LLMBYOKModelDiscoveryTests {
+    @Test("Signed-out BYOK requests need no App token", arguments: ["/chat", "/chat/stream", "/chat/ask", "/chat/models"])
+    func signedOutRequests(endpoint: String) async throws {
+        let networking = LLMNetworking()
+        let request = try await networking.makeRequest(
+            endpoint: endpoint, method: "POST", body: EmptyMetadata(),
+            credentials: .init(configuration: .openAI, apiKey: "synthetic-key")
+        )
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == "synthetic-key")
+        #expect(request.url?.path.hasPrefix("/chat/byok") == true)
+    }
+
     @Test("Discovery uses a dedicated route, keeps app auth and never puts keys in the body")
     func requestIsolation() async throws {
         let networking = LLMNetworking()
@@ -55,14 +67,14 @@ struct LLMBYOKModelDiscoveryTests {
         #expect(try await client.inferenceCredentials(for: .other("manual-model")) != nil)
     }
 
-    @Test("The networking path decodes advisory unknown model IDs without credits")
-    func decodedCatalog() async throws {
+    @Test("The networking path decodes advisory models with or without App login", arguments: [false, true])
+    func decodedCatalog(authenticated: Bool) async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ModelDiscoveryProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         let networking = LLMNetworking(session: session)
-        await networking.setToken("app-token")
+        if authenticated { await networking.setToken("app-token") }
         let response: APIResponse<[LLMBYOKModel]> = try await networking.postInference(
             "/chat/models", body: EmptyMetadata(), credentials: .init(configuration: .openAI, apiKey: "discovery-secret")
         )
@@ -77,8 +89,9 @@ private final class ModelDiscoveryProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        let appToken = request.value(forHTTPHeaderField: "Authorization")
         let valid = request.url?.path == "/chat/byok/models"
-            && request.value(forHTTPHeaderField: "Authorization") == "Bearer app-token"
+            && (appToken == nil || appToken == "Bearer app-token")
             && request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == "discovery-secret"
         let response = HTTPURLResponse(url: request.url!, statusCode: valid ? 200 : 400, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

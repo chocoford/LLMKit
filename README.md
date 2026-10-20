@@ -39,7 +39,8 @@ struct MyApp: App {
 There is one configuration-driven `LLMBYOKProvider`. OpenRouter, OpenAI, Anthropic and
 Google Gemini are ready-made `LLMBYOKConfiguration` presets, not separate implementations.
 Custom connections use the same API. Requests still go through LLMServer, which retains
-app authentication, Domain Agent prompts, tool policy and chat/SSE. BYOK does not use the
+Domain Agent prompts, tool policy and chat/SSE. BYOK inference and model discovery need no
+App login, anonymous session, subscription or platform credits. BYOK does not use the
 platform model catalog or model-tier subscription gates; the upstream decides model access.
 
 The host app owns key storage (normally Keychain). Pass an async key reader; the SDK reads
@@ -58,6 +59,11 @@ func makeBYOKClient(
     )
 }
 ```
+
+The App's auth provider can remain configured for platform features. You do not need to
+call `restore()` or obtain an App token before BYOK requests. If a valid token is already
+present, the backend can associate inference usage with that existing identity; a missing
+or expired token does not block BYOK. Guest calls do not create an account or credit record.
 
 A custom configuration contains only connection settings and may be saved/synced by the
 App. Keys stay separate. `baseURL` is an HTTPS API root; `chat/completions` is appended:
@@ -109,7 +115,7 @@ let otherModels = try await client.listBYOKModels(provider: provider)
 let sameConnectionModels = try await client.listBYOKModels(for: selectedModel)
 ```
 
-The SDK sends authenticated `POST /chat/byok/models` to LLMServer, which queries the
+The SDK sends `POST /chat/byok/models` to LLMServer with BYOK credentials, which queries the
 selected upstream with the request-only key. It does not run inference, inject prompts,
 check/debit credits or create an LLM usage record. OpenAI/OpenRouter/Gemini use compatible
 model lists; Anthropic uses native `x-api-key` authentication and fetches all pages.
@@ -163,7 +169,8 @@ resolve credentials per request. Titles use `options.auxiliaryModel` if configur
 the BYOK conversation model. Select a compatible `model` / `summaryModel` for `ask` and manual
 compaction; their existing OpenAI defaults are unchanged. No model/key fallback is performed.
 
-- The App JWT stays in `Authorization`. Key-free config uses `X-LLM-BYOK-Configuration`;
+- An optional App JWT stays in `Authorization`; BYOK does not require it.
+  Key-free config uses `X-LLM-BYOK-Configuration`;
   the model key travels separately in `X-LLM-BYOK-Key`, never the JSON body.
 - SDK requests use `/chat/byok`, `/chat/byok/stream`, `/chat/byok/ask` and `/chat/byok/models`. Older servers
   reject unsupported routes/configuration rather than silently billing the platform.
@@ -176,7 +183,7 @@ compaction; their existing OpenAI defaults are unchanged. No model/key fallback 
   Domain Agent hosts need server approval via `LLM_BYOK_TRUSTED_AGENT_HOSTS`, because they
   receive the server-held prompt; the four official preset hosts are preapproved.
 - BYOK model inference does not consume platform model credits; tools/search/uploads retain
-  their own rules. Product authentication, agent registration, endpoint trust and tool policy
+  their own authentication/billing rules. Agent registration, endpoint trust and tool policy
   remain. Platform model allowlists and model-tier plan gates apply only in platform mode;
   any separate agent/tool entitlements are not waived by BYOK.
 - Provider failures never switch to the platform key. Upstream auth/balance failures use a
