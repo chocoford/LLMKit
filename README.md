@@ -39,7 +39,8 @@ struct MyApp: App {
 There is one configuration-driven `LLMBYOKProvider`. OpenRouter, OpenAI, Anthropic and
 Google Gemini are ready-made `LLMBYOKConfiguration` presets, not separate implementations.
 Custom connections use the same API. Requests still go through LLMServer, which retains
-app authentication, Domain Agent prompts, model/plan validation, tool policy and chat/SSE.
+app authentication, Domain Agent prompts, tool policy and chat/SSE. BYOK does not use the
+platform model catalog or model-tier subscription gates; the upstream decides model access.
 
 The host app owns key storage (normally Keychain). Pass an async key reader; the SDK reads
 it for each inference request and does not persist or encode its result:
@@ -81,8 +82,16 @@ Options cover usage frames, output-token limits/parameter, store=false, model al
 Google thought signatures and OpenRouter extensions. Only Chat Completions-compatible APIs
 with Bearer-key authentication are supported, not arbitrary native Responses/Messages/Gemini,
 extra-header/query authentication or provider-specific image/audio/video APIs. The Anthropic
-and Gemini presets use official compatibility endpoints, not OpenRouter. Native image models
-remain enabled by the OpenRouter preset, not by first-party chat presets.
+and Gemini presets use official compatibility endpoints, not OpenRouter. The OpenRouter
+preset selects the existing image-response extension for known image variants; other presets
+forward those model IDs through the normal chat adapter rather than reject them by name.
+This does not add support for native image endpoints or guarantee a model's capabilities.
+
+BYOK accepts model IDs not present in `SupportedModel` via `.other("model-id")`. Neither
+provider-family prefixes nor the Domain Agent's `modelProfiles` / `allowedModels` are model
+admission rules in BYOK mode. Only basic model-ID syntax/size validation remains. Provider
+errors are returned without a replacement model or a platform-key retry. Use the user's
+connection/model selection in BYOK UI, not the platform model menu or its paid tiers.
 
 For multiple keys or dynamic connection selection, use `byokModelCredentialsProvider`:
 
@@ -134,7 +143,9 @@ compaction; their existing OpenAI defaults are unchanged. No model/key fallback 
   Domain Agent hosts need server approval via `LLM_BYOK_TRUSTED_AGENT_HOSTS`, because they
   receive the server-held prompt; the four official preset hosts are preapproved.
 - BYOK model inference does not consume platform model credits; tools/search/uploads retain
-  their own rules. Product authentication, model allowlists and subscription gates remain.
+  their own rules. Product authentication, agent registration, endpoint trust and tool policy
+  remain. Platform model allowlists and model-tier plan gates apply only in platform mode;
+  any separate agent/tool entitlements are not waived by BYOK.
 - Provider failures never switch to the platform key. Upstream auth/balance failures use a
   fixed BYOK HTTP 502 error rather than platform logout/recharge behavior.
 - SDK BYOK streams always require a complete server `[DONE]` frame. Partial EOF, malformed

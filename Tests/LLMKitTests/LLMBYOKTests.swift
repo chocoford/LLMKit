@@ -138,6 +138,21 @@ struct LLMBYOKTests {
         #expect(!String(reflecting: provider).contains("custom-secret-key"))
     }
 
+    @Test("Unknown model IDs stay in the request and are not replaced by platform defaults")
+    func unrestrictedModelRequest() async throws {
+        let model = SupportedModel.other("future-family/model-v99:preview")
+        let client = LLMClient(authProvider: NoAuthProvider(), byokProvider: .init(configuration: .openAI) { "synthetic-key" })
+        let credentials = try #require(try await client.inferenceCredentials(for: model))
+        let request = try await LLMNetworking().makeRequest(
+            endpoint: "/chat", method: "POST", body: ["model": model.rawValue], credentials: credentials
+        )
+        let body = try #require(request.httpBody)
+        let payload = try JSONDecoder().decode([String: String].self, from: body)
+        #expect(payload["model"] == model.rawValue)
+        #expect(request.url?.path == "/chat/byok")
+        #expect(try configuration(in: request) == .openAI)
+    }
+
     private func configuration(in request: URLRequest) throws -> LLMBYOKConfiguration {
         let encoded = try #require(request.value(forHTTPHeaderField: "X-LLM-BYOK-Configuration"))
         let data = try #require(Data(base64Encoded: encoded))

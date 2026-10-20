@@ -23,7 +23,8 @@ import LLMCore
 
 extension LLMClient {
     /// 拉取一个 domain agent 的客户端可见配置。
-    /// 新客户端优先使用 `modelProfiles`; `defaultModel` / `allowedModels` 仅作为老客户端 fallback。
+    /// 平台计费优先使用 `modelProfiles`; `defaultModel` / `allowedModels` 仅作为老客户端 fallback。
+    /// BYOK 的模型选择来自用户连接配置, 不应被这些平台菜单或套餐档位限制。
     /// 这是公共只读配置端点, 不要求 auth, 不触发 LLM 调用, 不扣 credits。
     public func getDomainAgentConfig(agentID: String) async throws -> DomainAgentConfigResponse {
         try await networking.get("/domain-agents/config/\(agentID)")
