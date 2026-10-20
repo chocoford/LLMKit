@@ -79,8 +79,8 @@ let provider = LLMBYOKProvider(configuration: configuration) {
 `defaultModel` is a hint for the host App; it does not silently override existing SDK method
 defaults or an explicitly requested model. You can also edit a preset's value-type settings.
 Options cover usage frames, output-token limits/parameter, store=false, model aliases,
-Google thought signatures and OpenRouter extensions. Only Chat Completions-compatible APIs
-with Bearer-key authentication are supported, not arbitrary native Responses/Messages/Gemini,
+Google thought signatures and OpenRouter extensions. Inference supports only Chat Completions-compatible APIs
+with Bearer-key authentication, not arbitrary native Responses/Messages/Gemini,
 extra-header/query authentication or provider-specific image/audio/video APIs. The Anthropic
 and Gemini presets use official compatibility endpoints, not OpenRouter. The OpenRouter
 preset selects the existing image-response extension for known image variants; other presets
@@ -92,6 +92,39 @@ provider-family prefixes nor the Domain Agent's `modelProfiles` / `allowedModels
 admission rules in BYOK mode. Only basic model-ID syntax/size validation remains. Provider
 errors are returned without a replacement model or a platform-key retry. Use the user's
 connection/model selection in BYOK UI, not the platform model menu or its paid tiers.
+
+### List models for a BYOK connection
+
+```swift
+// Uses the client's configured BYOK provider; reads the key for this request only.
+let models = try await client.listBYOKModels()
+for entry in models {
+    print(entry.id, entry.displayName)
+    // entry.model is a SupportedModel, including .other(...) for unknown IDs.
+}
+
+// Browse an explicit connection without changing the client's provider.
+let otherModels = try await client.listBYOKModels(provider: provider)
+// Or resolve the connection using the existing model-aware credential callback.
+let sameConnectionModels = try await client.listBYOKModels(for: selectedModel)
+```
+
+The SDK sends authenticated `POST /chat/byok/models` to LLMServer, which queries the
+selected upstream with the request-only key. It does not run inference, inject prompts,
+check/debit credits or create an LLM usage record. OpenAI/OpenRouter/Gemini use compatible
+model lists; Anthropic uses native `x-api-key` authentication and fetches all pages.
+No failure retries with the platform key.
+
+Custom connections default to `GET {baseURL}/models`. Set `modelDiscovery` to
+`.init(path: "catalog/models")` for a different relative path, or `nil` to disable it.
+Paths cannot change origin or escape the API root. Missing upstream list endpoints return
+HTTP 501; disabled local discovery throws `LLMBYOKConfigurationError.modelDiscoveryUnsupported`.
+An empty list is distinct from an unsupported query. With a model-aware callback, supply
+`provider:` or `for:` explicitly; a no-argument query cannot guess a connection.
+
+This is an advisory upstream catalog, not a whitelist or a guarantee of chat/tools/modality
+support. Keep manual model-ID entry available and retain the selected connection alongside
+the ID: vendor-native IDs do not identify a provider by themselves.
 
 For multiple keys or dynamic connection selection, use `byokModelCredentialsProvider`:
 
@@ -132,7 +165,7 @@ compaction; their existing OpenAI defaults are unchanged. No model/key fallback 
 
 - The App JWT stays in `Authorization`. Key-free config uses `X-LLM-BYOK-Configuration`;
   the model key travels separately in `X-LLM-BYOK-Key`, never the JSON body.
-- SDK requests use `/chat/byok`, `/chat/byok/stream` and `/chat/byok/ask`. Older servers
+- SDK requests use `/chat/byok`, `/chat/byok/stream`, `/chat/byok/ask` and `/chat/byok/models`. Older servers
   reject unsupported routes/configuration rather than silently billing the platform.
   Keys are never sent to auth, credits, tools, push, search or upload endpoints.
 - LLMServer processes the key only in request memory. The BYOK path does not write it to a
@@ -158,7 +191,7 @@ new SDK. The optional `ToolCall.providerMetadata` preserves Gemini thought signa
 custom persistence and tool sanitizers must retain it. No database migration is needed for
 Codable tool JSON. Adjust App send-button credit gating for BYOK if necessary; tools can
 still require platform credits. Proxies, APM, tracing and crash reporting must exclude
-inbound `X-LLM-BYOK-Key` and outbound provider `Authorization` from captured requests.
+inbound `X-LLM-BYOK-Key` and outbound provider `Authorization` / `x-api-key` from captured requests.
 
 ## Advanced Configuration (Multi-Window)
 

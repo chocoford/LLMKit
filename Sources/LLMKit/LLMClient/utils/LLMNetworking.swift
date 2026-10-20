@@ -216,7 +216,7 @@ public actor LLMNetworking {
         let resolvedEndpoint: String
         if credentials != nil {
             // An old server must return 404, never ignore the headers and bill its own key.
-            let byokEndpoints = ["/chat": "/chat/byok", "/chat/stream": "/chat/byok/stream", "/chat/ask": "/chat/byok/ask"]
+            let byokEndpoints = ["/chat": "/chat/byok", "/chat/stream": "/chat/byok/stream", "/chat/ask": "/chat/byok/ask", "/chat/models": "/chat/byok/models"]
             guard let byokEndpoint = byokEndpoints[endpoint] else {
                 throw LLMBYOKConfigurationError.unsupportedEndpoint
             }
