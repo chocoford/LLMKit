@@ -43,7 +43,7 @@
       "location" : "https://github.com/chocoford/LLMCore.git",
       "state" : {
         "branch" : "main",
-        "revision" : "550864efdece3703749835d2a310412f57698871"
+        "revision" : "7c56748d689600e1824b5abd26be700db705bbc9"
       }
     },
     {
@@ -52,7 +52,7 @@
       "location" : "https://github.com/MacPaw/OpenAI.git",
       "state" : {
         "branch" : "main",
-        "revision" : "75b91848dbd326313a2bf60f9833da2ebc9c0287"
+        "revision" : "8fe7034492817abd942ddac5e4dd64636393666a"
       }
     },
     {
@@ -96,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "4038b6a4f74a1426f47eb1dd5b4bb5628a15d597",
-        "version" : "1.16.1"
+        "revision" : "c9c6bb9d275ec0d95c3ad16391f3f045dc623104",
+        "version" : "1.16.2"
       }
     },
     {

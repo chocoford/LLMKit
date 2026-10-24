@@ -38,8 +38,9 @@ struct MyApp: App {
 
 There is one configuration-driven `LLMBYOKProvider`. The ready-made `LLMBYOKConfiguration`
 presets cover OpenRouter, OpenAI, Anthropic, Google Gemini, DeepSeek, xAI, Mistral, Groq,
-Together AI, Fireworks AI, Moonshot/Kimi, Z.AI/Zhipu, Alibaba Cloud/Qwen, MiniMax,
-SiliconFlow and Volcengine Ark/Doubao. They are data, not separate implementations.
+Together AI, Moonshot/Kimi, Alibaba Cloud/Qwen, MiniMax and SiliconFlow. They are data,
+not separate implementations. New presets reuse OpenAI-compatible chat and model discovery;
+no account-scoped management APIs or additional provider adapters are included.
 Custom connections use the same API. Requests still go through LLMServer, which retains
 Domain Agent prompts, tool policy and chat/SSE. BYOK inference and model discovery need no
 App login, anonymous session, subscription or platform credits. BYOK does not use the
@@ -69,10 +70,9 @@ or expired token does not block BYOK. Guest calls do not create an account or cr
 
 Use `LLMBYOKPreset.allCases` and `preset.displayName` to populate a connection menu. Every
 preset has a matching configuration convenience, for example `.deepSeek`, `.xAI`, `.groq`,
-`.siliconFlow` or `.volcengine`. Moonshot, MiniMax and DashScope have separate China and
+`.siliconFlow` or `.miniMax`. Moonshot, MiniMax and DashScope have separate China and
 international presets (`.moonshotChina`, `.miniMaxChina`, `.dashScopeInternational`);
-`.zAI` and `.zhipu` are the international and China GLM endpoints. Region-specific keys
-are not interchangeable; no request retries another region or provider.
+region-specific keys are not interchangeable; no request retries another region or provider.
 
 The DashScope presets use shared Beijing/Singapore endpoints. Accounts using a recommended
 workspace-specific endpoint must edit `baseURL` to the exact API Host shown in their console.
@@ -138,10 +138,11 @@ check/debit credits or create an LLM usage record. Catalog-enabled presets use c
 model lists; Anthropic uses native `x-api-key` authentication and fetches all pages.
 No failure retries with the platform key.
 
-Fireworks, Z.AI/Zhipu, MiniMax and Volcengine presets conservatively disable discovery:
-their documented catalogs are not a verified same-root OpenAI `GET models` contract. Keep
-manual model-ID entry available. This does not disable inference, and a host app may edit
-`modelDiscovery` when it has a verified compatible catalog endpoint.
+All exposed presets have model discovery configured. MiniMax's China/international presets
+reuse standard `GET {baseURL}/models` with Bearer authentication. Fireworks, Z.AI/Zhipu and
+Volcengine are deferred from the preset menu until their catalogs can reuse this contract
+or additional integration is explicitly added. They have no built-in Domain Agent host
+approval; compatible custom connections remain possible under the normal trust rules.
 
 Custom connections default to `GET {baseURL}/models`. Set `modelDiscovery` to
 `.init(path: "catalog/models")` for a different relative path, or `nil` to disable it.

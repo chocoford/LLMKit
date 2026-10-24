@@ -5,16 +5,13 @@ import Testing
 
 @Suite("Backend-mediated BYOK model discovery")
 struct LLMBYOKModelDiscoveryTests {
-    @Test("Every preset uses the backend and explicitly disables unsupported catalogs", arguments: LLMBYOKPreset.allCases)
+    @Test("Every exposed preset has discovery and uses the backend", arguments: LLMBYOKPreset.allCases)
     func presetDiscovery(provider: LLMBYOKPreset) async throws {
         let client = LLMClient(authProvider: NoAuthProvider(), byokProvider: .init(configuration: provider.configuration) { "synthetic-key" })
-        if provider.configuration.modelDiscovery == nil {
-            do { _ = try await client.listBYOKModels(); Issue.record("A disabled catalog must not send a request") }
-            catch LLMBYOKConfigurationError.modelDiscoveryUnsupported {}
-        }
+        #expect(provider.configuration.modelDiscovery != nil)
         let credentials = try await client.modelDiscoveryCredentials(provider: nil)
-        let request = try await LLMNetworking().makeRequest(endpoint: "/chat", method: "POST", body: EmptyMetadata(), credentials: credentials)
-        #expect(request.url?.path == "/chat/byok")
+        let request = try await LLMNetworking().makeRequest(endpoint: "/chat/models", method: "POST", body: EmptyMetadata(), credentials: credentials)
+        #expect(request.url?.path == "/chat/byok/models")
         #expect(request.url?.host != provider.configuration.baseURL.host)
         let encoded = try #require(request.value(forHTTPHeaderField: "X-LLM-BYOK-Configuration"))
         let data = try #require(Data(base64Encoded: encoded))
