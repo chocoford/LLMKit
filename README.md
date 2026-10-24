@@ -36,8 +36,10 @@ struct MyApp: App {
 
 ## BYOK through LLMServer
 
-There is one configuration-driven `LLMBYOKProvider`. OpenRouter, OpenAI, Anthropic and
-Google Gemini are ready-made `LLMBYOKConfiguration` presets, not separate implementations.
+There is one configuration-driven `LLMBYOKProvider`. The ready-made `LLMBYOKConfiguration`
+presets cover OpenRouter, OpenAI, Anthropic, Google Gemini, DeepSeek, xAI, Mistral, Groq,
+Together AI, Fireworks AI, Moonshot/Kimi, Z.AI/Zhipu, Alibaba Cloud/Qwen, MiniMax,
+SiliconFlow and Volcengine Ark/Doubao. They are data, not separate implementations.
 Custom connections use the same API. Requests still go through LLMServer, which retains
 Domain Agent prompts, tool policy and chat/SSE. BYOK inference and model discovery need no
 App login, anonymous session, subscription or platform credits. BYOK does not use the
@@ -64,6 +66,18 @@ The App's auth provider can remain configured for platform features. You do not 
 call `restore()` or obtain an App token before BYOK requests. If a valid token is already
 present, the backend can associate inference usage with that existing identity; a missing
 or expired token does not block BYOK. Guest calls do not create an account or credit record.
+
+Use `LLMBYOKPreset.allCases` and `preset.displayName` to populate a connection menu. Every
+preset has a matching configuration convenience, for example `.deepSeek`, `.xAI`, `.groq`,
+`.siliconFlow` or `.volcengine`. Moonshot, MiniMax and DashScope have separate China and
+international presets (`.moonshotChina`, `.miniMaxChina`, `.dashScopeInternational`);
+`.zAI` and `.zhipu` are the international and China GLM endpoints. Region-specific keys
+are not interchangeable; no request retries another region or provider.
+
+The DashScope presets use shared Beijing/Singapore endpoints. Accounts using a recommended
+workspace-specific endpoint must edit `baseURL` to the exact API Host shown in their console.
+That custom host still requires server approval to receive Domain Agent prompts. These are
+ordinary pay-as-you-go API presets, not vendor Coding Plan/subscription-key endpoints.
 
 A custom configuration contains only connection settings and may be saved/synced by the
 App. Keys stay separate. `baseURL` is an HTTPS API root; `chat/completions` is appended:
@@ -92,6 +106,9 @@ and Gemini presets use official compatibility endpoints, not OpenRouter. The Ope
 preset selects the existing image-response extension for known image variants; other presets
 forward those model IDs through the normal chat adapter rather than reject them by name.
 This does not add support for native image endpoints or guarantee a model's capabilities.
+Nor does a preset add native Responses/Agent APIs or preserve every vendor's separate
+reasoning/encrypted-thinking fields across tool rounds. Such models/features need additional
+protocol adapters; the generic Chat Completions preset alone is not a compatibility guarantee.
 
 BYOK accepts model IDs not present in `SupportedModel` via `.other("model-id")`. Neither
 provider-family prefixes nor the Domain Agent's `modelProfiles` / `allowedModels` are model
@@ -117,9 +134,14 @@ let sameConnectionModels = try await client.listBYOKModels(for: selectedModel)
 
 The SDK sends `POST /chat/byok/models` to LLMServer with BYOK credentials, which queries the
 selected upstream with the request-only key. It does not run inference, inject prompts,
-check/debit credits or create an LLM usage record. OpenAI/OpenRouter/Gemini use compatible
+check/debit credits or create an LLM usage record. Catalog-enabled presets use compatible
 model lists; Anthropic uses native `x-api-key` authentication and fetches all pages.
 No failure retries with the platform key.
+
+Fireworks, Z.AI/Zhipu, MiniMax and Volcengine presets conservatively disable discovery:
+their documented catalogs are not a verified same-root OpenAI `GET models` contract. Keep
+manual model-ID entry available. This does not disable inference, and a host app may edit
+`modelDiscovery` when it has a verified compatible catalog endpoint.
 
 Custom connections default to `GET {baseURL}/models`. Set `modelDiscovery` to
 `.init(path: "catalog/models")` for a different relative path, or `nil` to disable it.
@@ -181,7 +203,8 @@ compaction; their existing OpenAI defaults are unchanged. No model/key fallback 
 - Custom endpoints must resolve only to public IP addresses. LLMServer pins the checked
   address, verifies TLS against the original host, and disallows redirects/proxies. Custom
   Domain Agent hosts need server approval via `LLM_BYOK_TRUSTED_AGENT_HOSTS`, because they
-  receive the server-held prompt; the four official preset hosts are preapproved.
+  receive the server-held prompt; the fixed official hosts of the built-in presets are
+  preapproved by the server's installed LLMCore version (not by an App-provided label).
 - BYOK model inference does not consume platform model credits; tools/search/uploads retain
   their own authentication/billing rules. Agent registration, endpoint trust and tool policy
   remain. Platform model allowlists and model-tier plan gates apply only in platform mode;
