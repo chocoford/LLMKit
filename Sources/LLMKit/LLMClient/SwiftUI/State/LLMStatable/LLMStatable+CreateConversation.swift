@@ -28,6 +28,7 @@ extension LLMStatable {
         guard self.conversations.value?.first(where: { $0.id == id }) == nil else {
             throw NSError(domain: "LLMStatable", code: 1, userInfo: [NSLocalizedDescriptionKey: "Conversation with ID \(id) already exists"])
         }
+        try llmClient.validateAgentForCurrentMode(agentConfig.agentID)
 
         // Create new conversation
         let newConversation: Conversation = .init(
@@ -36,7 +37,8 @@ extension LLMStatable {
             agentConfig: agentConfig,
             title: "New conversation",
             createdAt: .now,
-            lastChatAt: .now
+            lastChatAt: .now,
+            directConnection: llmClient.directClient.map { .init(configuration: $0.provider.configuration, chatModel: model) }
         )
         await MainActor.run {
             self.conversations.transform {
@@ -61,7 +63,7 @@ extension LLMStatable {
 
         // 2. Tools description (if agent uses tools)
         if !agentConfig.tools.isEmpty {
-            let toolsDesc = await toolRegistry.generateToolsDescription(for: agentConfig.tools)
+            let toolsDesc = await toolRegistry.generateToolsDescription(for: agentConfig.tools, nativeToolCalls: llmClient.isDirectBYOK)
             if !toolsDesc.isEmpty {
                 systemPromptParts.append(toolsDesc)
             }
@@ -93,9 +95,11 @@ extension LLMStatable {
 
         // Generate title asynchronously if there's a user message
         if let firstUserMessage = messages.first, let content = firstUserMessage.content, !content.isEmpty {
+            let titleClient = llmClient
             Task {
+              do {
                 logger.info("Generating title for new conversation...")
-                let result = try await llmClient.auxiliaryChat(
+                let result = try await titleClient.auxiliaryChat(
                     preferredModel: model,
                     platformModel: .gpt35Turbo,
                     system: """
@@ -134,6 +138,10 @@ extension LLMStatable {
                         }
                     }
                 }
+              } catch {
+                // A title failure must not escape an unobserved Task or change inference modes.
+                logger.warning("Title generation failed; keeping the local conversation title.")
+              }
             }
         }
 

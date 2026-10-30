@@ -15,6 +15,7 @@ public actor LLMNetworking {
     private let id = UUID()
     private let baseURL: URL
     private let session: URLSession
+    private let permitsServerRequests: Bool
     private(set) var token: String?
     
     private let logger = Logger(label: "LLMNetworking")
@@ -28,6 +29,7 @@ public actor LLMNetworking {
         self.baseURL = URL(string: "https://llm.chocoford.com")!
 #endif
         self.session = session
+        self.permitsServerRequests = true
     }
 
     #if DEBUG
@@ -37,8 +39,16 @@ public actor LLMNetworking {
     ) {
         self.baseURL = baseURL
         self.session = session
+        self.permitsServerRequests = true
     }
     #endif
+
+    /// Defence in depth: even an accidentally registered backend tool must not send a request.
+    init(serverRequestsDisabled: Void) {
+        self.baseURL = URL(string: "https://llm.chocoford.com")!
+        self.session = .shared
+        self.permitsServerRequests = false
+    }
     
     let jsonDecoder = {
         let decoder = JSONDecoder()
@@ -213,6 +223,7 @@ public actor LLMNetworking {
         body: T? = nil,
         credentials: LLMBYOKCredentials? = nil
     ) throws -> URLRequest {
+        guard permitsServerRequests else { throw LLMDirectError.unsupportedCapability("LLMServer endpoints") }
         let resolvedEndpoint: String
         if credentials != nil {
             // An old server must return 404, never ignore the headers and bill its own key.

@@ -27,6 +27,8 @@ extension LLMStatable {
             throw ConversationNotFoundError()
         }
 
+        try llmClient.validateConnection(for: self.conversations.value![index])
+
         // Find the assistant message to regenerate
         guard let assistantMessageIndex = self.conversations.value![index].messages.firstIndex(where: { $0.id == fromMessageID }) else {
             throw NSError(domain: "LLMStatable", code: 2, userInfo: [NSLocalizedDescriptionKey: "Message with ID \(fromMessageID) not found"])
@@ -145,6 +147,8 @@ extension LLMStatable {
         guard let index = self.conversations.value?.firstIndex(where: { $0.id == conversationID }) else {
             throw ConversationNotFoundError()
         }
+
+        try llmClient.validateConnection(for: self.conversations.value![index])
 
         // 在 append 之前抓 anchor: 持久化时从这里 suffix 拿"用户消息 + 这次 agent run 产出的所有消息"。
         let persistFromIndex = self.conversations.value![index].messages.count

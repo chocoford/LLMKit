@@ -1,6 +1,6 @@
 import Foundation
 
-/// One backend-mediated BYOK provider, driven entirely by a non-secret configuration.
+/// One connection configuration and key source, shared by explicit server and Direct modes.
 /// The App owns the credential source (normally Keychain); this value never encodes a key.
 public struct LLMBYOKProvider: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let configuration: LLMBYOKConfiguration

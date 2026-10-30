@@ -73,6 +73,8 @@ extension LLMStatable {
             throw ConversationNotFoundError()
         }
 
+        try llmClient.validateConnection(for: self.conversations.value![index])
+
         // .error stub 是 UI-only (不持久化), 只清理尾部连续的 error, 不需要同步 persistence delete。
         await MainActor.run {
             self.conversations.transform { conversations in

@@ -6,6 +6,7 @@ extension LLMClient {
     /// charging platform credits. Supply a provider when browsing a different connection.
     /// The returned list is advisory; callers may still submit any valid model ID.
     public func listBYOKModels(provider: LLMBYOKProvider? = nil) async throws -> [LLMBYOKModel] {
+        if let directClient { return try await directClient.listModels(provider: provider) }
         let credentials = try await modelDiscoveryCredentials(provider: provider)
         return try await fetchBYOKModels(credentials: credentials)
     }
@@ -13,7 +14,8 @@ extension LLMClient {
     /// Resolve the connection through the existing model-aware credential callback.
     /// An explicit platform selection throws rather than querying with the platform key.
     public func listBYOKModels(for model: SupportedModel) async throws -> [LLMBYOKModel] {
-        guard let credentials = try await inferenceCredentials(for: model) else {
+        if let directClient { return try await directClient.listModels() }
+        guard let credentials = try await modelCredentials(for: model) else {
             throw LLMBYOKConfigurationError.providerRequired
         }
         return try await fetchBYOKModels(credentials: credentials)

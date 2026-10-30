@@ -35,6 +35,11 @@ extension LLMStatable {
         guard let index = self.conversations.value?.firstIndex(where: { $0.id == conversationID }) else {
             throw ConversationNotFoundError()
         }
+        let llmClient = self.llmClient
+        try llmClient.validateConnection(for: self.conversations.value![index])
+        if llmClient.isDirectBYOK {
+            self.conversations.transform { $0[index].directConnection?.chatModel = model }
+        }
 
         let loadingResponseMessage = ChatMessage.loading()
         let canStream = model.supportsStreaming
@@ -92,6 +97,11 @@ extension LLMStatable {
         }
 
         do {
+            // The state layer prepares/persists images before AgentExecutor calls chat().
+            // Apply the host's optional admission check before those upload side effects too.
+            if llmClient.accessPolicy != nil, !llmClient.isDirectBYOK {
+                _ = try await llmClient.inferenceCredentials(for: model, agentID: self.conversations.value![index].agentConfig.agentID)
+            }
             // Upload/inline only the active context that will be sent to the model.
             // Compacted-out historical messages may contain stale local file URLs; they are not
             // part of contextMessages, so they must not fail the current run.
@@ -131,7 +141,6 @@ extension LLMStatable {
             //   - role=.assistant + toolCalls 非空 → 中间一轮(模型说话+决定调工具)
             //   - role=.tool                   → 工具执行结果
             //   - role=.assistant + 无 toolCalls → 终态(最终回复)
-            let llmClient = self.llmClient
             let approvalHandler = self.toolApprovalHandler
             let responseStream = try await executor.execute(
                 conversationID: conversation.id,
@@ -284,6 +293,14 @@ extension LLMStatable {
             // 先 flush throttler pending — 即便 cancel/error, 节流窗口里最后一帧的内容也要落到 messages,
             // 否则 partial assistant 内容截止时间会是"最后一次 flush" 而非"cancel 那一刻", 短少 0-N ms 内容。
             await MainActor.run { assistantThrottler.flushNow() }
+
+            if Task.isCancelled || isUserCancellationError(error) {
+                if let i = conversations.value?.firstIndex(where: { $0.id == conversationID }) {
+                    conversations.transform { $0[i].messages.removeAll { $0.id == loadingResponseMessage.id } }
+                }
+                streamingStore.removeStream(for: conversationID)
+                throw CancellationError()
+            }
 
             // 反应式 context overflow 兜底: 上游报"上下文超限"且本次还没重试过, 自动 compact + 重试一次。
             // - 用 _compactConversationCore (不走 cancelAndAwait, 避免取消自己)

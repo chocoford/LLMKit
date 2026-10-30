@@ -34,6 +34,78 @@ struct MyApp: App {
 }
 ```
 
+## BYOK Direct (no LLMServer)
+
+Select Direct explicitly when the App should connect to the user's model service without
+platform login, credits, uploads or private server Domain Agent prompts:
+
+```swift
+let client = LLMClient(
+    directBYOK: LLMBYOKProvider(configuration: .openAI, apiKeyProvider: readAPIKey),
+    options: .init(systemPrompt: "Your App-owned basic drawing instructions")
+)
+let models = try await client.listBYOKModels() // advisory; manual IDs remain valid
+let response = try await client.chat(model: .other(selectedModelID), text: "Draw a flowchart")
+let agent = AgentConfig.withTools(["draw", "checkpoint"], systemPrompt: "Use the registered local tools.")
+// Register the App's local Tool implementations and use this client/agent with LLMState.
+// Keep agentID nil: server Domain Agents are intentionally unavailable in Direct.
+```
+
+Direct reuses the same presets/custom HTTPS configurations, model aliases and native tool
+schemas. The App owns key storage, local prompts and tool execution; the service bills the
+user. No Direct error retries with LLMServer, platform credentials or another model.
+Streaming requires valid frames, complete tool arguments, a successful finish reason and
+the configured upstream completion marker. Cancelling the consumer stops the HTTP request.
+
+Titles and summaries use the same connection. Model precedence is
+`LLMDirectOptions.auxiliaryModel`, then `configuration.options.auxiliaryModel`, then the chat
+model. Auxiliary requests do not inherit the drawing system prompt. Images are prepared
+inline (or retained as existing HTTPS URLs), never uploaded to LLMServer/R2 by Direct.
+Generated image/audio output and server-backed tools/endpoints return explicit unsupported
+errors; the App can supply its own local drawing/image tools instead.
+
+Conversations carry a Codable, non-secret connection configuration and chat-model hint,
+never the key. Host persistence should save/restore the full Conversation snapshot, including
+the updated hint when changing models. Existing conversations with no Direct binding remain backend conversations. Send,
+regenerate, resume and compaction reject a mismatched mode/configuration; start a new
+conversation when switching. Use separate clients/states for Direct and enhanced backend
+assistants. `inferenceMode`/`isDirectBYOK` let the App select its own UI and access rules.
+Requests disable redirects, caching and cookie handling. If you inject a custom URLSession,
+its remaining networking/TLS configuration and lifetime are managed by the host App.
+Pass a compatible selected model explicitly to `ask`; its existing OpenAI default is not
+automatically substituted with a vendor-specific model.
+
+## App-owned access preflight
+
+Pass `accessPolicy: LLMAccessPolicyProvider` to the normal `LLMClient` initializer to check
+local feature access before backend inference or image upload. It receives the actual model,
+resource and billing source. The App interprets opaque requirement IDs using its own
+entitlements; LLMKit has no built-in Starter/Pro/Max hierarchy. For a selected platform profile:
+
+```swift
+try await client.authorizeAccess(.init(
+    resource: .init(kind: "agent", id: agentID, billingSource: .platform, modelProfileID: profile.id),
+    model: profile.model,
+    requirementIDs: profile.requirements.requiredAccessIDs
+))
+
+// A fresh server-side UI preview, not a permission token:
+let decision = try await client.getAccessDecision(for: .init(
+    kind: "agent", id: agentID, billingSource: .platform, modelProfileID: profile.id
+))
+```
+
+The host policy must deny unknown requirements. Without a callback, ordinary inference keeps
+relying on authoritative server checks; explicit local requirement checks fail closed.
+The server independently derives resources and applies trusted Dashboard/admin rules scoped
+to the authenticated App. Neither the callback nor preview can grant server permission.
+New local features can use `authorizeAccess` with App-owned resource/requirement IDs.
+
+Handle `LLMError.accessDenied(requirementIDs:)` separately from `.unauthorized` and
+`.insufficientCredits`. Legacy non-policy 403 responses remain `.forbidden`; missing server
+policy is `.server(statusCode: 503, ...)`, not a payment failure. Consumers with exhaustive
+switches over `LLMError` must handle the new case. Direct mode does not query server policies.
+
 ## BYOK through LLMServer
 
 There is one configuration-driven `LLMBYOKProvider`. The ready-made `LLMBYOKConfiguration`
@@ -42,8 +114,9 @@ Together AI, Moonshot/Kimi, Alibaba Cloud/Qwen, MiniMax and SiliconFlow. They ar
 not separate implementations. New presets reuse OpenAI-compatible chat and model discovery;
 no account-scoped management APIs or additional provider adapters are included.
 Custom connections use the same API. Requests still go through LLMServer, which retains
-Domain Agent prompts, tool policy and chat/SSE. BYOK inference and model discovery need no
-App login, anonymous session, subscription or platform credits. BYOK does not use the
+Domain Agent prompts, tool policy and chat/SSE. Backend BYOK inference requires App login
+and configured App access, but not platform model credits. Advisory model discovery remains
+guest-capable. BYOK does not use the
 platform model catalog or model-tier subscription gates; the upstream decides model access.
 
 The host app owns key storage (normally Keychain). Pass an async key reader; the SDK reads
@@ -63,10 +136,10 @@ func makeBYOKClient(
 }
 ```
 
-The App's auth provider can remain configured for platform features. You do not need to
-call `restore()` or obtain an App token before BYOK requests. If a valid token is already
-present, the backend can associate inference usage with that existing identity; a missing
-or expired token does not block BYOK. Guest calls do not create an account or credit record.
+Obtain a valid App token with the existing auth flow before backend BYOK inference. Server
+requirements map to the App's registered subscription products in Dashboard; the SDK does
+not define a new plan. Model discovery alone needs no App token and creates no account or
+credit record. Direct BYOK is separate from this backend authorization mechanism.
 
 Use `LLMBYOKPreset.allCases` and `preset.displayName` to populate a connection menu. Every
 preset has a matching configuration convenience, for example `.deepSeek`, `.xAI`, `.groq`,
@@ -192,7 +265,7 @@ resolve credentials per request. Titles use `options.auxiliaryModel` if configur
 the BYOK conversation model. Select a compatible `model` / `summaryModel` for `ask` and manual
 compaction; their existing OpenAI defaults are unchanged. No model/key fallback is performed.
 
-- An optional App JWT stays in `Authorization`; BYOK does not require it.
+- An App JWT stays in `Authorization`; backend inference requires it, model discovery does not.
   Key-free config uses `X-LLM-BYOK-Configuration`;
   the model key travels separately in `X-LLM-BYOK-Key`, never the JSON body.
 - SDK requests use `/chat/byok`, `/chat/byok/stream`, `/chat/byok/ask` and `/chat/byok/models`. Older servers

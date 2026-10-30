@@ -19,6 +19,7 @@ extension LLMClient {
         agentID: String? = nil,
         tools: [ToolSchema]? = nil
     ) async throws -> APIResponse<ChatMessageContent> {
+        let credentials = isDirectBYOK ? nil : try await inferenceCredentials(for: model, agentID: agentID)
         let preparedMessages = try await prepareUploadFiles(for: (
             system == nil ? [] : [
                 .init(role: .system, content: system!),
@@ -27,7 +28,7 @@ extension LLMClient {
             .init(role: .user, content: text)
         ])
 
-        let credentials = try await inferenceCredentials(for: model)
+        if let directClient { return try await directClient.chat(model: model, messages: preparedMessages, agentID: agentID, tools: tools) }
         return try await networking.postInference(
             "/chat",
             body: ChatRequest(
@@ -48,9 +49,10 @@ extension LLMClient {
         agentID: String? = nil,
         tools: [ToolSchema]? = nil
     ) async throws -> APIResponse<ChatMessageContent> {
+        let credentials = isDirectBYOK ? nil : try await inferenceCredentials(for: model, agentID: agentID)
         let preparedMessages = try await prepareUploadFiles(for: messages)
 
-        let credentials = try await inferenceCredentials(for: model)
+        if let directClient { return try await directClient.chat(model: model, messages: preparedMessages, agentID: agentID, tools: tools) }
         return try await networking.postInference(
             "/chat",
             body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools),
@@ -66,6 +68,7 @@ extension LLMClient {
         agentID: String? = nil,
         tools: [ToolSchema]? = nil
     ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
+        let credentials = isDirectBYOK ? nil : try await inferenceCredentials(for: model, agentID: agentID)
         let preparedMessages = try await prepareUploadFiles(for: (
             system == nil ? [] : [
                 .init(role: .system, content: system!),
@@ -74,7 +77,7 @@ extension LLMClient {
             .init(role: .user, content: text)
         ])
 
-        let credentials = try await inferenceCredentials(for: model)
+        if let directClient { return try await directClient.streamChat(model: model, messages: preparedMessages, agentID: agentID, tools: tools) }
         return try await networking.streamInference("/chat/stream", body: ChatRequest(
             model: model,
             messages: preparedMessages,
@@ -91,9 +94,10 @@ extension LLMClient {
         agentID: String? = nil,
         tools: [ToolSchema]? = nil
     ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
+        let credentials = isDirectBYOK ? nil : try await inferenceCredentials(for: model, agentID: agentID)
         let preparedMessages = try await prepareUploadFiles(for: messages)
 
-        let credentials = try await inferenceCredentials(for: model)
+        if let directClient { return try await directClient.streamChat(model: model, messages: preparedMessages, agentID: agentID, tools: tools) }
         return try await networking.streamInference(
             "/chat/stream",
             body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools),
@@ -108,6 +112,13 @@ extension LLMClient {
         system: String,
         text: String
     ) async throws -> APIResponse<ChatMessageContent> {
+        if let directClient {
+            return try await directClient.chat(
+                model: directClient.auxiliaryModel(fallback: preferredModel),
+                messages: [.init(role: .system, content: system), .init(role: .user, content: text)],
+                agentID: nil, tools: nil, includeBasePrompt: false
+            )
+        }
         let credentials = try await inferenceCredentials(for: preferredModel)
         let model = credentials.map { credentials in
             credentials.configuration.options.auxiliaryModel.map(SupportedModel.init(rawValue:)) ?? preferredModel

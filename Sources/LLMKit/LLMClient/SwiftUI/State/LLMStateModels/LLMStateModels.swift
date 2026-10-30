@@ -13,6 +13,16 @@ public enum ConversationPhase: String, Codable, Sendable {
     case loading
 }
 
+/// Non-secret binding prevents silently sending Direct history through another connection.
+public struct LLMDirectConversationBinding: Codable, Equatable, Sendable {
+    public var configuration: LLMBYOKConfiguration
+    public var chatModel: SupportedModel
+    public init(configuration: LLMBYOKConfiguration, chatModel: SupportedModel) {
+        self.configuration = configuration
+        self.chatModel = chatModel
+    }
+}
+
 public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var id: String = UUID().uuidString
     
@@ -60,6 +70,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
 
     public var createdAt: Date
     public var lastChatAt: Date
+    /// nil denotes an existing backend conversation. API keys are never serialized here.
+    public var directConnection: LLMDirectConversationBinding?
 
     public init(
         id: String = UUID().uuidString,
@@ -68,7 +80,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         title: String,
         messages: [ChatMessage] = [],
         createdAt: Date,
-        lastChatAt: Date
+        lastChatAt: Date,
+        directConnection: LLMDirectConversationBinding? = nil
     ) {
         self.id = id
         self.type = type
@@ -77,5 +90,6 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.messages = messages
         self.createdAt = createdAt
         self.lastChatAt = lastChatAt
+        self.directConnection = directConnection
     }
 }

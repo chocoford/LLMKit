@@ -6,8 +6,9 @@ public typealias LLMBYOKPreset = LLMCore.LLMBYOKPreset
 
 /// Request-only credentials. This type deliberately does not conform to Codable.
 ///
-/// The host app owns persistence (for example, Keychain). LLMKit sends these credentials
-/// only to LLMServer's chat/model-discovery endpoints; it never saves them in conversations or metadata.
+/// The host app owns persistence (for example, Keychain). Explicit server mode sends these
+/// only to LLMServer's BYOK endpoints; Direct sends only the key to the selected service.
+/// Neither mode saves keys in conversations or metadata.
 public struct LLMBYOKCredentials: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let configuration: LLMBYOKConfiguration
     private let apiKey: String
@@ -41,18 +42,24 @@ public struct LLMBYOKCredentials: Sendable, CustomStringConvertible, CustomDebug
         }
         try configuration.validate()
 
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty,
-              key.utf8.count <= 4096,
-              key.utf8.allSatisfy({ (33...126).contains($0) }) else {
-            throw LLMBYOKConfigurationError.invalidAPIKey
-        }
+        let key = try validatedAPIKey()
         let data = try JSONEncoder().encode(configuration)
         request.setValue(data.base64EncodedString(), forHTTPHeaderField: "X-LLM-BYOK-Configuration")
         request.setValue(nil, forHTTPHeaderField: "X-LLM-BYOK-Provider")
         request.setValue(key, forHTTPHeaderField: "X-LLM-BYOK-Key")
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+    }
+
+    /// Only the two explicitly selected transports can read this request-local value.
+    func validatedAPIKey() throws -> String {
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty,
+              key.utf8.count <= 4096,
+              key.utf8.allSatisfy({ (33...126).contains($0) }) else {
+            throw LLMBYOKConfigurationError.invalidAPIKey
+        }
+        return key
     }
 }
 

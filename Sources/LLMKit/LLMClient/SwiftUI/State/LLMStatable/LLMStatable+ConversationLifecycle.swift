@@ -33,6 +33,7 @@ extension LLMStatable {
         guard let convIndex = conversations.value?.firstIndex(where: { $0.id == conversationID }) else {
             throw ConversationNotFoundError()
         }
+
         guard let msgIndex = conversations.value?[convIndex].messages.firstIndex(where: { $0.id == fromMessageID }) else {
             throw ChatMessageNotFoundError()
         }
@@ -88,6 +89,9 @@ extension LLMStatable {
             throw ConversationNotFoundError()
         }
 
+        let summaryClient = llmClient
+        let summaryModel = try summaryClient.summaryModel(for: conversations.value![convIndex], requested: summaryModel)
+
         let messages = conversations.value![convIndex].messages
 
         // 当前活跃非-system 消息全部压。一刀切, 不切割也就不存在 tool_use / tool_result 配对问题。
@@ -112,7 +116,8 @@ extension LLMStatable {
         // 调便宜 model 生成 summary。这次调用本身不在 conversation 上下文里, 不影响主对话。
         let summaryText = try await self.generateCompactSummary(
             messages: toCompactContents,
-            model: summaryModel
+            model: summaryModel,
+            client: summaryClient
         )
 
         // 摘要消息: role=.user (避免冲淡主 system prompt), content 带前缀让模型识别;
@@ -156,7 +161,8 @@ extension LLMStatable {
     /// "earlier conversation"摘要。返回纯文本, 调用方负责包成 isCompactSummary 消息。
     private func generateCompactSummary(
         messages: [ChatMessageContent],
-        model: SupportedModel
+        model: SupportedModel,
+        client: LLMClient
     ) async throws -> String {
         let systemPrompt = """
         You are summarizing a conversation between a user and an assistant for context compression.
@@ -183,11 +189,12 @@ extension LLMStatable {
             return "\(label) \(parts.joined(separator: " "))"
         }.joined(separator: "\n\n")
 
-        let response = try await llmClient.chat(
-            model: model,
-            system: systemPrompt,
-            text: "Conversation to summarize:\n\n\(conversationText)"
-        )
+        let response: APIResponse<ChatMessageContent>
+        if client.isDirectBYOK {
+            response = try await client.auxiliaryChat(preferredModel: model, platformModel: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")
+        } else {
+            response = try await client.chat(model: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")
+        }
         guard let summary = response.data?.content, !summary.isEmpty else {
             throw NSError(
                 domain: "LLMStatable",

@@ -18,7 +18,7 @@ struct LLMBYOKModelDiscoveryTests {
         #expect(try JSONDecoder().decode(LLMBYOKConfiguration.self, from: data) == provider.configuration)
     }
 
-    @Test("Signed-out BYOK requests need no App token", arguments: ["/chat", "/chat/stream", "/chat/ask", "/chat/models"])
+    @Test("An absent App JWT is never replaced by the provider key", arguments: ["/chat", "/chat/stream", "/chat/ask", "/chat/models"])
     func signedOutRequests(endpoint: String) async throws {
         let networking = LLMNetworking()
         let request = try await networking.makeRequest(

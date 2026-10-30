@@ -21,6 +21,12 @@ public final class LLMClient: Sendable {
     internal let byokCredentialsProvider: LLMBYOKCredentialsProvider?
     internal let byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider?
     internal let byokProvider: LLMBYOKProvider?
+    internal let directClient: LLMDirectClient?
+    internal let accessPolicy: LLMAccessPolicyProvider?
+
+    /// Immutable for this client. Use separate clients/states for basic and enhanced assistants.
+    public var inferenceMode: LLMInferenceMode { directClient == nil ? .server : .directBYOK }
+    public var isDirectBYOK: Bool { directClient != nil }
     
     private let logger = Logger(label: "LLMClient")
     
@@ -30,7 +36,8 @@ public final class LLMClient: Sendable {
         uploadPolicy: LLMUploadPolicy? = nil,
         byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
         byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil,
-        byokProvider: LLMBYOKProvider? = nil
+        byokProvider: LLMBYOKProvider? = nil,
+        accessPolicy: LLMAccessPolicyProvider? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -43,6 +50,8 @@ public final class LLMClient: Sendable {
         self.byokCredentialsProvider = byokCredentialsProvider
         self.byokModelCredentialsProvider = byokModelCredentialsProvider
         self.byokProvider = byokProvider
+        self.directClient = nil
+        self.accessPolicy = accessPolicy
     }
 
     #if DEBUG
@@ -53,7 +62,8 @@ public final class LLMClient: Sendable {
         baseURL: URL,
         byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
         byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil,
-        byokProvider: LLMBYOKProvider? = nil
+        byokProvider: LLMBYOKProvider? = nil,
+        accessPolicy: LLMAccessPolicyProvider? = nil
     ) {
         self.networking = LLMNetworking(baseURL: baseURL)
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -66,6 +76,8 @@ public final class LLMClient: Sendable {
         self.byokCredentialsProvider = byokCredentialsProvider
         self.byokModelCredentialsProvider = byokModelCredentialsProvider
         self.byokProvider = byokProvider
+        self.directClient = nil
+        self.accessPolicy = accessPolicy
     }
     #endif
     
@@ -75,7 +87,8 @@ public final class LLMClient: Sendable {
         uploadPolicy: LLMUploadPolicy? = nil,
         byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
         byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil,
-        byokProvider: LLMBYOKProvider? = nil
+        byokProvider: LLMBYOKProvider? = nil,
+        accessPolicy: LLMAccessPolicyProvider? = nil
     ) {
         self.networking = LLMNetworking()
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -90,6 +103,8 @@ public final class LLMClient: Sendable {
         self.byokCredentialsProvider = byokCredentialsProvider
         self.byokModelCredentialsProvider = byokModelCredentialsProvider
         self.byokProvider = byokProvider
+        self.directClient = nil
+        self.accessPolicy = accessPolicy
     }
 
     #if DEBUG
@@ -100,7 +115,8 @@ public final class LLMClient: Sendable {
         baseURL: URL,
         byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
         byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil,
-        byokProvider: LLMBYOKProvider? = nil
+        byokProvider: LLMBYOKProvider? = nil,
+        accessPolicy: LLMAccessPolicyProvider? = nil
     ) {
         self.networking = LLMNetworking(baseURL: baseURL)
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
@@ -115,6 +131,8 @@ public final class LLMClient: Sendable {
         self.byokCredentialsProvider = byokCredentialsProvider
         self.byokModelCredentialsProvider = byokModelCredentialsProvider
         self.byokProvider = byokProvider
+        self.directClient = nil
+        self.accessPolicy = accessPolicy
     }
     #endif
     
@@ -130,6 +148,24 @@ public final class LLMClient: Sendable {
         self.byokCredentialsProvider = nil
         self.byokModelCredentialsProvider = nil
         self.byokProvider = nil
+        self.directClient = nil
+        self.accessPolicy = nil
+    }
+
+    /// A completely server-independent assistant. No App auth provider or uploader is created.
+    /// `session` is optional for host-managed networking/testing; its lifetime belongs to the host.
+    public init(directBYOK provider: LLMBYOKProvider, options: LLMDirectOptions = .init(), session: URLSession? = nil) {
+        self.networking = LLMNetworking(serverRequestsDisabled: ())
+        let changed = PassthroughSubject<Bool, Never>()
+        self.authStateChangedPublisher = changed
+        self.authManager = LLMAuthManager(provider: NoAuthProvider()) { changed.send($0) }
+        self.uploader = nil
+        self.uploadPolicy = nil
+        self.byokCredentialsProvider = nil
+        self.byokModelCredentialsProvider = nil
+        self.byokProvider = nil
+        self.directClient = LLMDirectClient(provider: provider, options: options, session: session)
+        self.accessPolicy = nil
     }
     
     internal let authStateChangedPublisher: PassthroughSubject<Bool, Never>
@@ -140,6 +176,7 @@ public final class LLMClient: Sendable {
     /// This method is suitable for app launch / cold start. It should not be treated as a
     /// foreground polling hook.
     public func restore() async {
+        guard !isDirectBYOK else { return }
         await authManager.restore()
 
         if await authManager.isAuthenticated {
@@ -194,6 +231,9 @@ public final class LLMClient: Sendable {
         prompt: String,
         model: SupportedModel = .gpt4oMini
     ) async throws -> APIResponse<ChatMessageContent> {
+        if let directClient {
+            return try await directClient.chat(model: model, messages: [.init(role: .user, content: prompt)], agentID: nil, tools: nil)
+        }
         let body = AskRequest<EmptyMetadata>(prompt: prompt, model: model)
         let credentials = try await inferenceCredentials(for: model)
         let response: APIResponse<ChatMessageContent> = try await self.networking.postInference(
@@ -203,7 +243,18 @@ public final class LLMClient: Sendable {
         return withUsageMiddleware(response)
     }
 
-    func inferenceCredentials(for model: SupportedModel) async throws -> LLMBYOKCredentials? {
+    func inferenceCredentials(for model: SupportedModel, agentID: String? = nil) async throws -> LLMBYOKCredentials? {
+        if let directClient { return try await directClient.provider.credentials() }
+        let credentials = try await modelCredentials(for: model)
+        let billing: LLMAccessBillingSource = credentials == nil ? .platform : .byok
+        try await authorizeAccess(.init(resource: .init(kind: "inference", id: "chat", billingSource: billing), model: model))
+        if let agentID { try await authorizeAccess(.init(resource: .init(kind: "agent", id: agentID, billingSource: billing), model: model)) }
+        return credentials
+    }
+
+    /// Credential selection is independent of inference admission: advisory model discovery
+    /// uses this resolver without invoking the host's paid-inference preflight.
+    func modelCredentials(for model: SupportedModel) async throws -> LLMBYOKCredentials? {
         // A model-specific callback takes precedence, including an explicit nil (platform mode).
         if let byokModelCredentialsProvider { return try await byokModelCredentialsProvider(model) }
         if let byokProvider { return try await byokProvider.credentials() }
@@ -251,6 +302,7 @@ public final class LLMClient: Sendable {
     /// foreground/background transitions.
     @discardableResult
     public func syncSubscriptionState() async throws -> SubscriptionStateInfo {
+        guard !isDirectBYOK else { throw LLMDirectError.unsupportedCapability("platform subscriptions") }
         try await authManager.restoreThrowing()
         if await authManager.isAuthenticated {
             _ = try await getCredits()
@@ -275,6 +327,7 @@ public final class LLMClient: Sendable {
     /// changes should come from App Store Server Notifications.
     @discardableResult
     public func completeSubscriptionPurchase(transactionSignedData: String) async throws -> CreditsInfo {
+        guard !isDirectBYOK else { throw LLMDirectError.unsupportedCapability("platform purchases") }
         try await authManager.subscriptionPurchaseCompleted(jws: transactionSignedData)
         return try await getCredits()
     }
@@ -307,6 +360,7 @@ public final class LLMClient: Sendable {
     
     @discardableResult
     public func addCredits(transactionSignedData: String) async throws -> CreditsInfo {
+        guard !isDirectBYOK else { throw LLMDirectError.unsupportedCapability("platform credits") }
         let creditsInfo = try await self.authManager.purchaseCompleted(jws: transactionSignedData)
 
         // 更新全局状态

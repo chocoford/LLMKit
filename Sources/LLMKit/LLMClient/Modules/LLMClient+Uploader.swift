@@ -16,7 +16,7 @@ extension LLMClient {
         // 决定走"上传"还是走"inline base64"。两条路径是互斥的:
         // - 有 uploader + autoUploadBase64 policy → 一律转远程 URL (节省 token, 持久化)
         // - 没配 → 本地内容必须 inline 成 base64 走 vision 通道 (file URL 上游拿不到, 必须本地化)
-        let canUpload = uploader != nil && uploadPolicy?.autoUploadBase64 == true
+        let canUpload = !isDirectBYOK && uploader != nil && uploadPolicy?.autoUploadBase64 == true
 
         // 第 1 遍: 把每个 file 归一成 (bytes, mime, index) — 不论它来自 file:// URL 还是 base64。
         // 远程 https URL 跳过, 它本来就能直接发给上游。

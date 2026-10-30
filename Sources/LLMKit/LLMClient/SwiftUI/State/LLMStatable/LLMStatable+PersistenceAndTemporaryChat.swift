@@ -33,8 +33,9 @@ extension LLMStatable {
         onUpdate: @escaping (_ message: ChatMessage) async throws -> Void,
         onFirstReply: @escaping (_ message: ChatMessage) async throws -> Void,
     ) async throws -> ChatMessage {
+        let client = llmClient
         if stream {
-            let stream = try await llmClient.streamChat(
+            let stream = try await client.streamChat(
                 model: model,
                 messages: messages.contentMessages
             )
@@ -43,7 +44,12 @@ extension LLMStatable {
                 print("[_temporaryChat] Received stream result: \(String(describing: result).prefix(1024))")
                 switch result {
                     case .message(let result):
-                        if case .content(let partial) = resMessage {
+                        if client.isDirectBYOK {
+                            // Direct emits cumulative native-tool snapshots, not text deltas.
+                            let isFirstReply = resMessage == nil
+                            resMessage = .content(result)
+                            if isFirstReply { try await onFirstReply(resMessage!) }
+                        } else if case .content(let partial) = resMessage {
                             let newContent = (partial.content ?? "") + (result.content ?? "")
                             resMessage?.content = newContent
                         } else {
@@ -63,27 +69,24 @@ extension LLMStatable {
                     try await onUpdate(resMessage)
                 }
             }
+            try Task.checkCancellation()
             guard resMessage != nil else {
                 logger.error("No response message received in streaming")
                 throw NSError() // Should never called
             }
             return resMessage!
         } else {
-            fatalError()
-            //            let result = try await self.llmClient.chat(
-            //                model: model,
-            //                messages: messages.contentMessages
-            //            )
-            //            logger.info("Chat result: \(String(describing: result).prefix(1024))")
-            //
-            //            if let error = result.error {
-            //
-            //            } else if let resMessage = result.data?.choices.first?.message {
-            //                if let credits = result.credits {
-            //                    self.updateCredits(credits.remains)
-            //                }
-            //                return resMessage
-            //            }
+            let result = try await client.chat(model: model, messages: messages.contentMessages)
+            if let error = result.error { throw LLMError.server(statusCode: error.code, message: error.message) }
+            guard var content = result.data else { throw LLMError.server(statusCode: 502, message: "No response received") }
+            if let credits = result.credits {
+                content.usage = credits
+                self.updateCreditsInfo(CreditsInfo(balance: credits.remains, periodicCredits: nil, purchasedCredits: 0))
+            }
+            let message = ChatMessage.content(content)
+            try await onFirstReply(message)
+            try await onUpdate(message)
+            return message
         }
     }
 }
