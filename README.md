@@ -297,6 +297,56 @@ Codable tool JSON. Adjust App send-button credit gating for BYOK if necessary; t
 still require platform credits. Proxies, APM, tracing and crash reporting must exclude
 inbound `X-LLM-BYOK-Key` and outbound provider `Authorization` / `x-api-key` from captured requests.
 
+## Dashboard-managed Schemes
+
+For new server-enhanced features, use stable Scheme/Model Option IDs instead of inferring a
+tier from a model ID. Schemes, display names, prompts, image parameter schemas and model menus
+are App-owned Dashboard data. Server authorization always uses its current saved configuration.
+Neither an App-provided label nor a discovery access snapshot grants access.
+
+```swift
+let schemes = try await client.getSchemes() // App JWT, no provider key
+let selected = LLMSchemeSelection(schemeID: "excalidraw-canvas", profileID: "extra-high")
+let stream = try await client.streamScheme(
+    selected, billing: .platform,
+    messages: [.init(role: .user, content: "Draw a flowchart")]
+)
+
+// Same contract for a parameterized image scheme. IDs/inputs are from your App's configuration.
+let image = try await client.invokeScheme(
+    .init(schemeID: "birthday_doodle"), billing: .platform,
+    parameters: ["title": "Happy birthday", "date": "2026-11-08", "text": "For you",
+                 "referenceImageURL": "https://example.com/reference.png"]
+)
+
+// Optimized BYOK keeps the Scheme prompt, but never selects a platform model option.
+let ownModelStream = try await client.streamScheme(
+    .init(schemeID: "excalidraw-canvas"), billing: .byok(model: .other("user/model-id")),
+    messages: [.init(role: .user, content: "Draw a flowchart")]
+)
+
+// Existing AgentExecutor/local drawing tools can use the selected Scheme without a new loop.
+let provider = LLMSchemeProvider(client: client, selection: selected, billing: .platform)
+let executor = AgentExecutor(llmProvider: provider, toolRegistry: toolRegistry)
+```
+
+The adapter's legacy `LLMProvider.model` argument cannot override the selected Scheme option;
+use descriptor capabilities/model metadata only for local UI/context-budget hints. Keep agentID
+nil or equal to schemeID. `LLMState`'s existing model-only conversation API remains unchanged;
+Apps opt into the Scheme APIs/adapter explicitly rather than silently changing saved conversations.
+
+Billing is required explicitly: `.platform` does not read provider keys; `.byok(model:)` requires
+credentials and a selection without profileID. A nil/missing credential source throws, never bills
+the platform. Image-scheme BYOK currently returns unsupported. Direct clients reject all server
+Scheme APIs; their local prompts/tools remain separate. No mode falls back automatically.
+Both platform and BYOK Scheme streams require `[DONE]`; interruption/corrupt frames throw before
+AgentExecutor can execute partial tool arguments. Legacy platform `/chat/stream` is unchanged.
+
+Existing clients can keep `/chat` and image aliases while migrating gradually. A model-only old
+caller cannot select between two options backed by the same model; move it to Scheme/profile IDs
+before introducing such duplicates. Publish the additive LLMCore DTOs, update pinned dependencies,
+then deploy the Server before shipping Scheme callers. No old ChatRequest fields were changed.
+
 ## Advanced Configuration (Multi-Window)
 
 When your application contains multiple windows or scenes, you typically need to share a single `LLMState` instance across all windows. This is particularly common in macOS applications where users can open multiple windows simultaneously.

@@ -142,7 +142,7 @@ public actor LLMNetworking {
                         throw LLMError.fromHTTP(statusCode: http.statusCode, body: bodyData)
                     }
 
-                    if usesBYOK {
+                    if usesBYOK || request.url?.path == "/schemes/stream" {
                         var decoder = LLMBYOKStreamDecoder<StreamChatResponse>()
                         for try await byte in bytes {
                             if let decoded = try decoder.append(byte) {
@@ -227,7 +227,11 @@ public actor LLMNetworking {
         let resolvedEndpoint: String
         if credentials != nil {
             // An old server must return 404, never ignore the headers and bill its own key.
-            let byokEndpoints = ["/chat": "/chat/byok", "/chat/stream": "/chat/byok/stream", "/chat/ask": "/chat/byok/ask", "/chat/models": "/chat/byok/models"]
+            let byokEndpoints = [
+                "/chat": "/chat/byok", "/chat/stream": "/chat/byok/stream",
+                "/chat/ask": "/chat/byok/ask", "/chat/models": "/chat/byok/models",
+                "/schemes/invoke": "/schemes/byok/invoke", "/schemes/stream": "/schemes/byok/stream"
+            ]
             guard let byokEndpoint = byokEndpoints[endpoint] else {
                 throw LLMBYOKConfigurationError.unsupportedEndpoint
             }

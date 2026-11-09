@@ -42,7 +42,8 @@ struct LLMBYOKTests {
     }
 
     @Test("Every inference method uses a route that old servers cannot platform-bill", arguments: [
-        ("/chat", "/chat/byok"), ("/chat/stream", "/chat/byok/stream"), ("/chat/ask", "/chat/byok/ask")
+        ("/chat", "/chat/byok"), ("/chat/stream", "/chat/byok/stream"), ("/chat/ask", "/chat/byok/ask"),
+        ("/schemes/invoke", "/schemes/byok/invoke"), ("/schemes/stream", "/schemes/byok/stream")
     ])
     func dedicatedInferenceRoutes(endpoint: String, expectedPath: String) async throws {
         let request = try await LLMNetworking().makeRequest(
@@ -239,6 +240,41 @@ struct LLMBYOKTests {
         #expect(received == 1)
     }
 
+    @Test("New platform scheme streams require DONE too", arguments: [BYOKStreamFixture.partialText, .invalidJSON, .complete])
+    func strictPlatformSchemeStream(fixture: BYOKStreamFixture) async throws {
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let stream = try await fixtureStream(fixture, session: session, byok: false, endpoint: "/schemes/stream")
+        do {
+            for try await _ in stream {}
+            #expect(fixture == .complete)
+        } catch {
+            #expect(fixture != .complete)
+        }
+    }
+
+    @Test("Direct mode rejects server schemes before reading any provider key")
+    func directRejectsSchemes() async throws {
+        let client = LLMClient(directBYOK: .init(configuration: .openAI) { throw LLMBYOKConfigurationError.invalidAPIKey })
+        do {
+            _ = try await client.getSchemes()
+            Issue.record("Direct must never query server schemes")
+        } catch is LLMDirectError {}
+        do {
+            _ = try await client.invokeScheme(.init(schemeID: "feature"), billing: .byok(model: .other("own-model")), metadata: EmptyMetadata())
+            Issue.record("Direct must never invoke server schemes")
+        } catch is LLMDirectError {}
+    }
+
+    @Test("Explicit Scheme BYOK cannot use a nil credential callback as platform fallback")
+    func schemeRequiresBYOKKey() async throws {
+        let client = LLMClient(authProvider: NoAuthProvider(), byokModelCredentialsProvider: { _ in nil })
+        do {
+            _ = try await client.invokeScheme(.init(schemeID: "feature"), billing: .byok(model: .other("own-model")), metadata: EmptyMetadata())
+            Issue.record("A missing key must fail before network/upload")
+        } catch LLMBYOKConfigurationError.providerRequired {}
+    }
+
     @Test("SSE comments, multiline data and standard line endings are supported", arguments: ["\n", "\r\n", "\r"])
     func validFraming(lineEnding: String) throws {
         let lines = [": heartbeat", "", "data:{\"id\":\"m\",", "data: \"content\":\"你好\"}", "", "data: [DONE]", "", ""]
@@ -262,12 +298,13 @@ struct LLMBYOKTests {
     private func fixtureStream(
         _ fixture: BYOKStreamFixture,
         session: URLSession,
-        byok: Bool = true
+        byok: Bool = true,
+        endpoint: String = "/chat/stream"
     ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
         let networking = LLMNetworking(session: session)
         await networking.setToken(fixture.rawValue)
         return try await networking.streamInference(
-            "/chat/stream", body: ["prompt": "hello"], credentials: byok ? credentials : nil
+            endpoint, body: ["prompt": "hello"], credentials: byok ? credentials : nil
         )
     }
 }

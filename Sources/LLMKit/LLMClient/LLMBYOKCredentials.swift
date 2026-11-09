@@ -32,7 +32,8 @@ public struct LLMBYOKCredentials: Sendable, CustomStringConvertible, CustomDebug
     func apply(to request: inout URLRequest) throws {
         guard let url = request.url,
               request.httpMethod == "POST",
-              ["/chat/byok", "/chat/byok/stream", "/chat/byok/ask", "/chat/byok/models"].contains(url.path) else {
+              ["/chat/byok", "/chat/byok/stream", "/chat/byok/ask", "/chat/byok/models",
+               "/schemes/byok/invoke", "/schemes/byok/stream"].contains(url.path) else {
             throw LLMBYOKConfigurationError.unsupportedEndpoint
         }
         let isLoopback = ["localhost", "127.0.0.1", "[::1]", "::1"].contains(url.host?.lowercased() ?? "")
@@ -83,9 +84,9 @@ public enum LLMBYOKConfigurationError: Error, LocalizedError, Sendable {
         case .insecureConnection:
             return "BYOK requires HTTPS, except for a local loopback development server."
         case .unsupportedEndpoint:
-            return "BYOK credentials can only be sent to LLMServer chat or model-discovery endpoints."
+            return "BYOK credentials can only be sent to LLMServer's dedicated BYOK chat, scheme or model-discovery endpoints."
         case .providerRequired:
-            return "Select a BYOK provider or model before listing models."
+            return "Select a BYOK provider with available credentials."
         case .modelDiscoveryUnsupported:
             return "Model discovery is disabled for this BYOK connection. You can still enter a model ID manually."
         case .invalidModelList:
