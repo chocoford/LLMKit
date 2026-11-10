@@ -189,7 +189,7 @@ public final class LLMStateObject: ObservableObject, @MainActor LLMStatable {
         self._configurePersistenceProvider(provider)
     }
 
-    /// Explicit model selection while idle; Scheme, billing source and connection stay unchanged.
+    /// Explicit model, platform/BYOK billing or connection selection while idle, within the same Scheme.
     public func updateSchemeConnection(_ binding: LLMSchemeConversationBinding, in conversationID: String) async throws {
         try await _updateSchemeConnection(binding, in: conversationID)
     }

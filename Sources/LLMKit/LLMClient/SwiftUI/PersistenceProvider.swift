@@ -30,7 +30,7 @@ public protocol PersistenceProvider: Sendable {
 }
 
 /// Optional additive capability. Existing stores keep working without changing their
-/// action switches; opt in to allow explicit model changes in a saved Scheme conversation.
+/// action switches; opt in to allow explicit model/billing/connection changes in a saved Scheme conversation.
 public protocol LLMSchemeConversationPersistenceProvider: PersistenceProvider {
     /// Atomically update only the route of an existing record. Never store provider keys.
     func updateSchemeConnection(_ binding: LLMSchemeConversationBinding, in conversationID: Conversation.ID) async throws

@@ -238,12 +238,12 @@ struct LLMSchemeStateTests {
         }
     }
 
-    @Test("Sending is blocked while a model selection is being persisted")
+    @Test("Sending is blocked while a billing switch is being persisted")
     func concurrentModelChange() async throws {
         let entered = SchemeCounter()
         let gate = SchemeRouteGate()
         let route = LLMSchemeConversationBinding(selection: selection, billing: .platform)
-        let next = LLMSchemeConversationBinding(selection: .init(schemeID: "drawing", profileID: "standard"), billing: .platform)
+        let next = LLMSchemeConversationBinding(selection: .init(schemeID: "drawing"), billing: .byok(model: model), connectionID: "new-connection")
         let conversation = Conversation(id: "changing", type: .regular, title: "Saved", createdAt: .now,
             lastChatAt: .now, schemeConnection: route)
         let persistence = SchemeRoutePersistence(conversation, entered: entered, gate: gate)
@@ -278,15 +278,18 @@ struct LLMSchemeStateTests {
             Issue.record("A store without routing-update support must fail before changing memory")
         } catch LLMSchemeStateError.routePersistenceRequired {}
         state.runningConversationIDs.insert(conversation.id)
-        do {
-            try await state.updateSchemeConnection(next, in: conversation.id)
-            Issue.record("An active generation must retain its original model")
-        } catch LLMSchemeStateError.generationInProgress {}
+        let byok = LLMSchemeConversationBinding(selection: .init(schemeID: "drawing"), billing: .byok(model: model), connectionID: "new-connection")
+        for change in [next, byok] {
+            do {
+                try await state.updateSchemeConnection(change, in: conversation.id)
+                Issue.record("An active generation must retain its original model and billing")
+            } catch LLMSchemeStateError.generationInProgress {}
+        }
         #expect(state.conversations.value?.first == conversation)
     }
 
-    @Test("Explicit BYOK model changes retain the connection and cannot change billing")
-    func byokModelChanges() async throws {
+    @Test("Idle conversations allow explicit model, billing and connection changes within their Scheme")
+    func explicitRoutingChanges() async throws {
         let client = LLMClient(authProvider: NoAuthProvider())
         let selection = LLMSchemeSelection(schemeID: "drawing")
         let original = LLMSchemeConversationBinding(selection: selection, billing: .byok(model: model), connectionID: "saved")
@@ -297,14 +300,87 @@ struct LLMSchemeStateTests {
         state.conversations.setAsLoaded([conversation])
         try await state.updateSchemeConnection(next, in: conversation.id)
         #expect(state.conversations.value?.first?.schemeConnection == next)
-        for rejected in [LLMSchemeConversationBinding(selection: selection, billing: .byok(model: model), connectionID: "another-connection"),
-                         .init(selection: .init(schemeID: "drawing", profileID: "quality"), billing: .platform)] {
-            do {
-                try await state.updateSchemeConnection(rejected, in: conversation.id)
-                Issue.record("A model update must not change connection or billing source")
-            } catch LLMSchemeStateError.connectionMismatch {}
+        let anotherConnection = LLMSchemeConversationBinding(selection: selection, billing: .byok(model: model), connectionID: "another-connection")
+        let platform = LLMSchemeConversationBinding(selection: .init(schemeID: "drawing", profileID: "quality"), billing: .platform)
+        for accepted in [anotherConnection, platform, original] {
+            try await state.updateSchemeConnection(accepted, in: conversation.id)
+            #expect(state.conversations.value?.first?.schemeConnection == accepted)
         }
-        #expect(state.conversations.value?.first?.schemeConnection == next)
+        let otherScheme = LLMSchemeConversationBinding(selection: .init(schemeID: "another", profileID: "quality"), billing: .platform)
+        do {
+            try await state.updateSchemeConnection(otherScheme, in: conversation.id)
+            Issue.record("Billing changes must not implicitly change the assistant Scheme")
+        } catch LLMSchemeStateError.connectionMismatch {}
+        #expect(state.conversations.value?.first?.schemeConnection == original)
+    }
+
+    @Test("Each explicit billing switch persists and uses only the newly selected transport and key")
+    func billingSwitchRoundTrip() async throws {
+        let keyReads = SchemeCounter()
+        try await fixture(credentials: { _ in
+            Issue.record("A bound conversation must not use the global billing selection")
+            return nil
+        }) { client, store in
+            let platform = LLMSchemeConversationBinding(selection: selection, billing: .platform)
+            let first = LLMSchemeConversationBinding(selection: .init(schemeID: "drawing"), billing: .byok(model: model), connectionID: "first")
+            let second = LLMSchemeConversationBinding(selection: .init(schemeID: "drawing"), billing: .byok(model: .other("user/second")), connectionID: "second")
+            let conversation = Conversation(id: "switch", type: .regular, title: "Saved", createdAt: .now,
+                lastChatAt: .now, schemeConnection: platform)
+            let persistence = SchemeRoutePersistence(conversation)
+            let state = LLMStateObject(llmClient: client, persistenceProvider: persistence, schemeCredentialsProvider: { id, _ in
+                await keyReads.record()
+                return .init(configuration: .openAI, apiKey: "\(id)-secret")
+            })
+            await state.refreshConversations()
+            for choice in [first, second, platform] {
+                try await state.updateSchemeConnection(choice, in: conversation.id)
+                #expect(await persistence.saved.schemeConnection == choice)
+                try await state.sendMessage(to: conversation.id, model: model, message: .content(.init(role: .user, content: "Continue")))
+                let request = try #require(store.requests.last)
+                switch choice.billing {
+                case .platform:
+                    #expect(request.url?.path == "/schemes/stream")
+                    #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == nil)
+                case .byok(let selectedModel):
+                    let connectionID = try #require(choice.connectionID)
+                    #expect(request.url?.path == "/schemes/byok/stream")
+                    #expect(request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == "\(connectionID)-secret")
+                    #expect(try payload(request)["byokModelID"] as? String == selectedModel.rawValue)
+                }
+            }
+            #expect(await keyReads.count == 2)
+            #expect(state.conversations.value?.first?.messages.count == 6)
+            #expect(state.conversations.value?.first?.schemeConnection == platform)
+            await persistence.failUpdates()
+            do {
+                try await state.updateSchemeConnection(first, in: conversation.id)
+                Issue.record("A failed billing update must keep both memory and storage unchanged")
+            } catch SchemeStoreFailure.write {}
+            #expect(state.conversations.value?.first?.schemeConnection == platform)
+            #expect(await persistence.saved.schemeConnection == platform)
+        }
+    }
+
+    @Test("Switching to BYOK without a credential resolver never sends a platform fallback")
+    func switchedBYOKMissingCredentials() async throws {
+        try await fixture { client, store in
+            let platform = LLMSchemeConversationBinding(selection: selection, billing: .platform)
+            let byok = LLMSchemeConversationBinding(selection: .init(schemeID: "drawing"), billing: .byok(model: model), connectionID: "missing")
+            let conversation = Conversation(id: "missing-after-switch", type: .regular, title: "Saved", createdAt: .now,
+                lastChatAt: .now, schemeConnection: platform)
+            let persistence = SchemeRoutePersistence(conversation)
+            let state = LLMStateObject(llmClient: client, persistenceProvider: persistence)
+            await state.refreshConversations()
+            try await state.updateSchemeConnection(byok, in: conversation.id)
+            do {
+                try await state.sendMessage(to: conversation.id, model: model, message: .content(.init(role: .user, content: "Hello")))
+                Issue.record("Missing BYOK credentials must not revert billing to platform")
+            } catch LLMSchemeStateError.credentialsProviderRequired {}
+            #expect(store.requests.isEmpty)
+            #expect(state.conversations.value?.first?.messages.isEmpty == true)
+            #expect(state.conversations.value?.first?.schemeConnection == byok)
+            #expect(await persistence.saved.schemeConnection == byok)
+        }
     }
 
     @Test("Platform Scheme auxiliary requests ignore a globally selected BYOK connection")

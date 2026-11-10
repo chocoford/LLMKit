@@ -339,9 +339,11 @@ For the existing state-layer loop, wrap **creation** in `client.withScheme(selec
 It persists a non-secret `Conversation.schemeConnection`; subsequent send/regenerate/resume/compact
 calls automatically resolve that route. Default platform profiles are resolved and pinned before
 uploads. A conflicting explicit scope fails instead of changing a saved conversation's route.
-To intentionally change a platform Profile or BYOK model while idle, call
-`state.updateSchemeConnection(_:in:)` before the next send. Scheme, billing source and connection
-identity must stay unchanged; switching those requires a new conversation. Persisted stores opt into
+To intentionally change a platform Profile, BYOK model, platform/BYOK billing or BYOK connection
+while idle, call `state.updateSchemeConnection(_:in:)` before the next send. Conversation history is
+retained and the next generation reauthorizes using the new source and resolves only its selected
+connection's key. The Scheme must stay unchanged; Direct/server modes use separate clients/conversations.
+Never change routing during generation or inside a scope prepared for another selection. Persisted stores opt into
 `LLMSchemeConversationPersistenceProvider` to atomically update that field. Unsupported/failed writes
 keep the old selection, and sending is blocked while a routing update is being saved.
 

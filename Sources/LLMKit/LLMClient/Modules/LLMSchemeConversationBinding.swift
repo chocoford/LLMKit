@@ -46,11 +46,11 @@ public enum LLMSchemeStateError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .invalidBinding: "The Scheme conversation route is invalid. BYOK requires a stable connection ID."
-        case .connectionMismatch: "This conversation has a different Scheme route. Explicitly update its model selection while idle, or start a new conversation to change Scheme, billing or connection."
+        case .connectionMismatch: "This conversation has a different Scheme route. Explicitly update its model, billing or connection while idle. Changing Scheme or Direct/server mode requires a new conversation."
         case .credentialsProviderRequired: "Restore this conversation's BYOK connection before continuing. No platform fallback was attempted."
         case .conversationRequired: "State-layer Scheme routing supports conversation schemes only."
-        case .generationInProgress: "Wait for this conversation's generation or routing update to finish before changing its model."
-        case .routePersistenceRequired: "The conversation store must support saving Scheme model changes before this selection can be updated."
+        case .generationInProgress: "Wait for this conversation's generation or routing update to finish before changing its routing."
+        case .routePersistenceRequired: "The conversation store must support saving Scheme routing changes before this selection can be updated."
         }
     }
 }

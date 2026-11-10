@@ -62,12 +62,7 @@ extension LLMStatable {
               let previous = conversation.schemeConnection else { throw LLMSchemeStateError.connectionMismatch }
         try previous.validate()
         if previous == binding { return }
-        guard previous.selection.schemeID == binding.selection.schemeID,
-              previous.connectionID == binding.connectionID else { throw LLMSchemeStateError.connectionMismatch }
-        switch (previous.billing, binding.billing) {
-        case (.platform, .platform), (.byok(_), .byok(_)): break
-        default: throw LLMSchemeStateError.connectionMismatch
-        }
+        guard previous.selection.schemeID == binding.selection.schemeID else { throw LLMSchemeStateError.connectionMismatch }
         guard inflightTasks[conversationID] == nil, !runningConversationIDs.contains(conversationID),
               !schemeConnectionUpdates.contains(conversationID) else { throw LLMSchemeStateError.generationInProgress }
         if let scoped = LLMSchemeScope.provider(for: llmClient), scoped.conversationBinding != binding {

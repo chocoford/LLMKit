@@ -129,7 +129,19 @@ try await llmState.updateSchemeConnection(
 )
 ```
 
-同一 BYOK 连接也可用这个方法更换 `billing: .byok(model:)`，保持原 `connectionID`。此方法不能切换 Scheme、计费来源或连接身份；这些变更仍需新建会话。它只保存用户选择，不代表获准使用；下一次生成仍重新鉴权。生成期间拒绝换模型，写入失败保留旧选择。
+这个入口也允许同一会话显式切换平台 AI／Optimized BYOK，以及更换 BYOK 连接。例如切到用户自己的连接：
+
+```swift
+try await llmState.updateSchemeConnection(
+    .init(selection: .init(schemeID: "excalidraw-canvas"),
+          billing: .byok(model: selectedModel), connectionID: selectedConnectionID),
+    in: conversationID
+)
+```
+
+切回平台时使用 `.platform`、具体 Profile ID，并清空 connectionID。此方法保留历史，不改变 Scheme；不同助手或 Basic Direct／服务端模式仍使用各自的会话与 client。切换只保存明确的用户选择，不代表获准使用；下一次生成按新来源重新鉴权并按新连接 ID 取 Key。生成期间拒绝切换，写入失败保留原选择并抛错，不自动开始请求或回退计费。应在当前生成结束后调用，不要在持有旧选择的 `withScheme` scope 中切换。
+
+切换到新的模型服务商后，后续请求会携带当前有效的会话上下文；App 应把该数据流向明确告知用户。SDK 不添加业务确认弹窗，也不会在失败时替用户改回其他来源。
 
 Optimized BYOK 新建时使用 `billing: .byok(model: selectedModel)` 和稳定的 `connectionID`，不传平台 Profile。首次 `withScheme` 仍从 client 的凭据回调取 Key，因此应放在 App 对该连接固定的 `withSelectedBilling` 范围内。为后续发送／恢复，在状态初始化时注入按 ID 查询的回调：
 
@@ -153,8 +165,8 @@ let llmState = LLMState(
 2. 单次生成固定 Scheme、Profile、计费和凭据，覆盖工具轮次和超限压缩后的自动重试。手动重试／恢复是新生成，按原路由重新取 Key、重新预检。
 3. 上传、重试删除历史等副作用前，按真实 Scheme/Profile 与计费来源检查 `/access/evaluate`；App 还能额外提供本地 accessPolicy。服务端执行时仍重新鉴权，预检不是授权凭证。
 4. 标题／摘要使用同一计费和凭据快照，但仍是独立辅助请求，不注入绘图 Scheme 的 Prompt 或执行绘图工具。BYOK 默认使用聊天模型，可配置同连接辅助模型；平台保留原辅助模型选择。
-5. 保留上传、流式更新、持久化、审批、取消、错误清理、压缩和 App 的 checkpoint／撤销。冲突的 Scheme/Profile/计费/连接 scope 报错，不隐式覆盖已绑定会话；会话内换模型使用上述显式更新入口。
-6. 只保存选择与连接 ID，绝不保存 Key。自定义 Core Data／SQLite／文档存储必须保留并恢复可选 `schemeConnection`；旧记录缺字段按 nil 读取。非整份 Codable 存储需要 App 补字段映射和自己的存储迁移。SDK 没有修改原 `PersistenceProvider` 协议或 LLMCore。若要支持已保存会话换模型，存储实现还需遵循可选子协议 `LLMSchemeConversationPersistenceProvider`，用 `updateSchemeConnection(_:in:)` 原子更新既有记录的路由字段；未升级的实现仍可聊天，但换模型会明确报错，不会只改内存而丢失持久化。
+5. 保留上传、流式更新、持久化、审批、取消、错误清理、压缩和 App 的 checkpoint／撤销。冲突的 Scheme/Profile/计费/连接 scope 报错，不隐式覆盖已绑定会话；会话内换模型、计费来源或 BYOK 连接使用上述显式更新入口。
+6. 只保存选择与连接 ID，绝不保存 Key。自定义 Core Data／SQLite／文档存储必须保留并恢复可选 `schemeConnection`；旧记录缺字段按 nil 读取。非整份 Codable 存储需要 App 补字段映射和自己的存储迁移。SDK 没有修改原 `PersistenceProvider` 协议或 LLMCore。若要支持已保存会话切换路由，存储实现还需遵循可选子协议 `LLMSchemeConversationPersistenceProvider`，用 `updateSchemeConnection(_:in:)` 原子更新既有记录的完整路由字段；未升级的实现仍可聊天，但切换会明确报错，不会只改内存而丢失持久化。
 
 ### Optimized BYOK
 

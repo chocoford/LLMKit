@@ -200,8 +200,8 @@ public final class LLMState:  @MainActor LLMStatable {
         self._configurePersistenceProvider(provider)
     }
 
-    /// Explicitly select another platform Profile or BYOK model while idle. Scheme,
-    /// billing source and connection identity stay unchanged. Persistence failure keeps the old route.
+    /// Explicitly change model, platform/BYOK billing or BYOK connection while idle.
+    /// Scheme stays unchanged. Persistence failure keeps the old route; the next run reauthorizes.
     public func updateSchemeConnection(_ binding: LLMSchemeConversationBinding, in conversationID: String) async throws {
         try await _updateSchemeConnection(binding, in: conversationID)
     }
