@@ -31,6 +31,14 @@ extension LLMClient {
         tools: [ToolSchema]? = nil
     ) async throws -> APIResponse<ChatMessageContent> {
         let credentials = try await schemeCredentials(selection, billing: billing)
+        return try await invokePreparedScheme(selection, billing: billing, credentials: credentials,
+            messages: messages, parameters: parameters, metadata: metadata, tools: tools)
+    }
+
+    internal func invokePreparedScheme<Metadata: ContentModel>(
+        _ selection: LLMSchemeSelection, billing: LLMSchemeBilling, credentials: LLMBYOKCredentials?,
+        messages: [ChatMessageContent], parameters: [String: String] = [:], metadata: Metadata?, tools: [ToolSchema]?
+    ) async throws -> APIResponse<ChatMessageContent> {
         let body = LLMSchemeRequest(
             scheme: selection, messages: try await prepareUploadFiles(for: messages),
             parameters: parameters, metadata: metadata, tools: tools,
@@ -49,6 +57,14 @@ extension LLMClient {
         tools: [ToolSchema]? = nil
     ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
         let credentials = try await schemeCredentials(selection, billing: billing)
+        return try await streamPreparedScheme(selection, billing: billing, credentials: credentials,
+            messages: messages, parameters: parameters, metadata: metadata, tools: tools)
+    }
+
+    internal func streamPreparedScheme<Metadata: ContentModel>(
+        _ selection: LLMSchemeSelection, billing: LLMSchemeBilling, credentials: LLMBYOKCredentials?,
+        messages: [ChatMessageContent], parameters: [String: String] = [:], metadata: Metadata?, tools: [ToolSchema]?
+    ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
         let body = LLMSchemeRequest(
             scheme: selection, messages: try await prepareUploadFiles(for: messages),
             parameters: parameters, metadata: metadata, tools: tools,
@@ -57,7 +73,7 @@ extension LLMClient {
         return try await networking.streamInference("/schemes/stream", body: body, credentials: credentials)
     }
 
-    private func schemeCredentials(_ selection: LLMSchemeSelection, billing: LLMSchemeBilling) async throws -> LLMBYOKCredentials? {
+    internal func schemeCredentials(_ selection: LLMSchemeSelection, billing: LLMSchemeBilling) async throws -> LLMBYOKCredentials? {
         guard !isDirectBYOK else { throw LLMDirectError.unsupportedCapability("server schemes") }
         try selection.validate()
         let credentials: LLMBYOKCredentials?

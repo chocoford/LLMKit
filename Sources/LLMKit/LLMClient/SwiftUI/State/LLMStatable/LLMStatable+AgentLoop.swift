@@ -99,7 +99,9 @@ extension LLMStatable {
         do {
             // The state layer prepares/persists images before AgentExecutor calls chat().
             // Apply the host's optional admission check before those upload side effects too.
-            if llmClient.accessPolicy != nil, !llmClient.isDirectBYOK {
+            let schemeProvider = LLMSchemeScope.provider(for: llmClient)
+            try schemeProvider?.validateAgent(self.conversations.value![index].agentConfig.agentID)
+            if schemeProvider == nil, llmClient.accessPolicy != nil, !llmClient.isDirectBYOK {
                 _ = try await llmClient.inferenceCredentials(for: model, agentID: self.conversations.value![index].agentConfig.agentID)
             }
             // Upload/inline only the active context that will be sent to the model.
@@ -134,7 +136,8 @@ extension LLMStatable {
             logger.info("Running agent loop end")
 
             let conversation = self.conversations.value![index]
-            let executor = AgentExecutor(llmProvider: llmClient, toolRegistry: toolRegistry)
+            let provider: any LLMProvider = schemeProvider.map { $0 as any LLMProvider } ?? llmClient
+            let executor = AgentExecutor(llmProvider: provider, toolRegistry: toolRegistry)
 
             // Use AgentExecutor for all interactions (native tool-use; no separate onStep callback).
             // 流里会拿到三种 ChatMessageContent:
