@@ -19,6 +19,32 @@ extension LLMStatable {
         invocationContext: (any ChatInvocationContext)? = nil,
         replyTransformer: ((_ assistantMessage: ChatMessage) async throws -> ChatMessage)? = nil
     ) async throws {
+        let task = Task<Void, Error> { [weak self] in
+            guard let self else { return }
+            try await self.withConversationScheme(conversationID) {
+                try await self._regenerateMessageBody(in: conversationID, fromMessageID: fromMessageID,
+                    model: model, stream: stream, metadata: metadata, invocationContext: invocationContext,
+                    replyTransformer: replyTransformer)
+            }
+        }
+        self.inflightTasks[conversationID] = task
+        defer { self.inflightTasks[conversationID] = nil }
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func _regenerateMessageBody<Metadata: Codable & Equatable & Sendable>(
+        in conversationID: String,
+        fromMessageID: String,
+        model: SupportedModel,
+        stream: Bool,
+        metadata: Metadata,
+        invocationContext: (any ChatInvocationContext)?,
+        replyTransformer: ((_ assistantMessage: ChatMessage) async throws -> ChatMessage)?
+    ) async throws {
         guard case .loaded = conversations else {
             throw ConversationNotReadyError()
         }
@@ -90,15 +116,17 @@ extension LLMStatable {
         // 客户端 catch 到 CancellationError print 出"The operation couldn't be completed..."。
         let task = Task<Void, Error> { [weak self] in
             guard let self else { return }
-            try await self._sendMessageBody(
-                to: conversationID,
-                model: model,
-                message: message,
-                stream: stream,
-                metadata: metadata,
-                invocationContext: invocationContext,
-                replyTransformer: replyTransformer
-            )
+            try await self.withConversationScheme(conversationID) {
+                try await self._sendMessageBody(
+                    to: conversationID,
+                    model: model,
+                    message: message,
+                    stream: stream,
+                    metadata: metadata,
+                    invocationContext: invocationContext,
+                    replyTransformer: replyTransformer
+                )
+            }
         }
         self.inflightTasks[conversationID] = task
         defer {

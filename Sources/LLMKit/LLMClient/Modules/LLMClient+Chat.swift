@@ -119,6 +119,8 @@ extension LLMClient {
                 agentID: nil, tools: nil, includeBasePrompt: false
             )
         }
+        let scoped = LLMSchemeScope.provider(for: self)
+        let preferredModel = scoped?.auxiliaryModel(fallback: preferredModel) ?? preferredModel
         let credentials = try await inferenceCredentials(for: preferredModel)
         let model = credentials.map { credentials in
             credentials.configuration.options.auxiliaryModel.map(SupportedModel.init(rawValue:)) ?? preferredModel

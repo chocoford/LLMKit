@@ -46,6 +46,8 @@ public final class LLMState:  @MainActor LLMStatable {
     /// 暴露给外部只读: UI 渲染历史消息里的 toolCalls 时, 用它按 name 反查 Tool 拿 displayName。
     public internal(set) var toolRegistry: ToolRegistry
     var persistenceProvider: (any PersistenceProvider)?
+    let schemeCredentialsProvider: LLMSchemeConversationCredentialsProvider?
+    var schemeConnectionUpdates: Set<String> = []
 
     /// 流式 chunk 写入 messages 的频率策略, 详见 `StreamPublishStrategy`。
     public let streamPublishStrategy: StreamPublishStrategy
@@ -54,12 +56,14 @@ public final class LLMState:  @MainActor LLMStatable {
         llmClient: LLMClient,
         toolRegistry: ToolRegistry = ToolRegistry(),
         persistenceProvider: PersistenceProvider?,
-        streamPublishStrategy: StreamPublishStrategy = .immediate
+        streamPublishStrategy: StreamPublishStrategy = .immediate,
+        schemeCredentialsProvider: LLMSchemeConversationCredentialsProvider? = nil
     ) {
         self.llmClient = llmClient
         self.toolRegistry = toolRegistry
         self.persistenceProvider = persistenceProvider
         self.streamPublishStrategy = streamPublishStrategy
+        self.schemeCredentialsProvider = schemeCredentialsProvider
         // 默认 approval handler 桥到 publisher 模式: AgentExecutor 调到这个 closure 时,
         // 内部 await 一个 continuation, 同时把 request 发布到 pendingApprovalRequest;
         // SwiftUI 看到字段变化弹 sheet, 用户点击后调 respondToApproval(_:), continuation
@@ -194,6 +198,12 @@ public final class LLMState:  @MainActor LLMStatable {
 
     public func configurePersistenceProvider(_ provider: PersistenceProvider) {
         self._configurePersistenceProvider(provider)
+    }
+
+    /// Explicitly select another platform Profile or BYOK model while idle. Scheme,
+    /// billing source and connection identity stay unchanged. Persistence failure keeps the old route.
+    public func updateSchemeConnection(_ binding: LLMSchemeConversationBinding, in conversationID: String) async throws {
+        try await _updateSchemeConnection(binding, in: conversationID)
     }
 
     public func createConversation<Metadata: Codable & Equatable & Sendable>(

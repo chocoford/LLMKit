@@ -22,6 +22,8 @@ protocol LLMStatable: AnyObject {
 
     var creditsInfo: CreditsInfo? { get set }
     var persistenceProvider: PersistenceProvider? { get set }
+    var schemeCredentialsProvider: LLMSchemeConversationCredentialsProvider? { get }
+    var schemeConnectionUpdates: Set<String> { get set }
 
     /// 同一会话同时只允许一个 in-flight 生成, 注册的是 _sendMessage 的内层 Task,
     /// `cancelGeneration(conversationID:)` 找到这个 Task 调 cancel(),

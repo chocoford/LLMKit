@@ -2,7 +2,7 @@ import Foundation
 import LLMCore
 
 /// Explicit transport/billing selection. Missing BYOK credentials never select platform billing.
-public enum LLMSchemeBilling: Sendable {
+public enum LLMSchemeBilling: Codable, Equatable, Sendable {
     case platform
     case byok(model: SupportedModel)
 }
@@ -30,8 +30,8 @@ extension LLMClient {
         metadata: Metadata? = EmptyMetadata(),
         tools: [ToolSchema]? = nil
     ) async throws -> APIResponse<ChatMessageContent> {
-        let credentials = try await schemeCredentials(selection, billing: billing)
-        return try await invokePreparedScheme(selection, billing: billing, credentials: credentials,
+        let prepared = try await prepareScheme(selection, billing: billing)
+        return try await invokePreparedScheme(prepared.selection, billing: billing, credentials: prepared.credentials,
             messages: messages, parameters: parameters, metadata: metadata, tools: tools)
     }
 
@@ -56,8 +56,8 @@ extension LLMClient {
         metadata: Metadata? = EmptyMetadata(),
         tools: [ToolSchema]? = nil
     ) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
-        let credentials = try await schemeCredentials(selection, billing: billing)
-        return try await streamPreparedScheme(selection, billing: billing, credentials: credentials,
+        let prepared = try await prepareScheme(selection, billing: billing)
+        return try await streamPreparedScheme(prepared.selection, billing: billing, credentials: prepared.credentials,
             messages: messages, parameters: parameters, metadata: metadata, tools: tools)
     }
 
@@ -73,8 +73,11 @@ extension LLMClient {
         return try await networking.streamInference("/schemes/stream", body: body, credentials: credentials)
     }
 
-    internal func schemeCredentials(_ selection: LLMSchemeSelection, billing: LLMSchemeBilling) async throws -> LLMBYOKCredentials? {
+    internal func prepareScheme(_ requested: LLMSchemeSelection, billing: LLMSchemeBilling,
+                               credentialsProvider: (@Sendable () async throws -> LLMBYOKCredentials)? = nil) async throws
+        -> (selection: LLMSchemeSelection, credentials: LLMBYOKCredentials?, kind: LLMSchemeKind, model: SupportedModel?) {
         guard !isDirectBYOK else { throw LLMDirectError.unsupportedCapability("server schemes") }
+        var selection = requested
         try selection.validate()
         let credentials: LLMBYOKCredentials?
         switch billing {
@@ -82,25 +85,45 @@ extension LLMClient {
             credentials = nil // Explicit selection; do not read the App's provider key.
         case .byok(let model):
             guard selection.profileID == nil else { throw LLMSchemeValidationError.invalidSelection }
-            guard let value = try await modelCredentials(for: model) else { throw LLMBYOKConfigurationError.providerRequired }
+            let value: LLMBYOKCredentials
+            if let credentialsProvider { value = try await credentialsProvider() }
+            else {
+                guard let resolved = try await modelCredentials(for: model) else { throw LLMBYOKConfigurationError.providerRequired }
+                value = resolved
+            }
+            try value.configuration.validate()
+            _ = try value.validatedAPIKey()
+            _ = try value.configuration.modelMapping.resolve(model.rawValue)
             credentials = value
         }
 
-        // Optional host preflight uses exactly the same identities as the authoritative server.
-        // Discovery is advisory, not a token; the server resolves and checks again at execution.
-        if accessPolicy != nil {
-            let scheme = try await getScheme(id: selection.schemeID)
-            let profileID = credentials == nil ? selection.profileID ?? scheme.defaultProfileID : nil
-            let modelID = billing.modelID ?? scheme.profiles.first(where: { $0.id == profileID })?.modelID
-            let model = modelID.map(SupportedModel.init(rawValue:))
-            let source: LLMAccessBillingSource = credentials == nil ? .platform : .byok
-            try await authorizeAccess(.init(resource: .init(kind: "inference", id: "chat", billingSource: source), model: model))
-            try await authorizeAccess(.init(resource: .init(
-                kind: scheme.kind == .conversation ? "agent" : "image-scene", id: scheme.id,
-                billingSource: source, modelProfileID: profileID
-            ), model: model))
+        try Task.checkCancellation()
+        let scheme = try await getScheme(id: selection.schemeID)
+        guard scheme.id == selection.schemeID else { throw LLMSchemeValidationError.invalidSelection }
+        if credentials == nil {
+            selection.profileID = selection.profileID ?? scheme.defaultProfileID
+            guard scheme.profiles.contains(where: { $0.id == selection.profileID }) else { throw LLMSchemeValidationError.invalidSelection }
         }
-        return credentials
+        let modelID = billing.modelID ?? scheme.profiles.first(where: { $0.id == selection.profileID })?.modelID
+        let model = modelID.map(SupportedModel.init(rawValue:))
+        let source: LLMAccessBillingSource = credentials == nil ? .platform : .byok
+        let resources: [LLMAccessResource] = [
+            .init(kind: "inference", id: "chat", billingSource: source),
+            .init(kind: scheme.kind == .conversation ? "agent" : "image-scene", id: scheme.id,
+                  billingSource: source, modelProfileID: selection.profileID)
+        ]
+        // Always preflight actual server identities before uploads. The server still
+        // rechecks at invocation; public discovery/access metadata is never an admission token.
+        for resource in resources {
+            try await authorizeAccess(.init(resource: resource, model: model))
+            let decision = try await getAccessDecision(for: resource)
+            guard decision.allowed else {
+                throw LLMError.accessDenied(requirementIDs: decision.missingRequirementIDs.isEmpty
+                    ? decision.requirementIDs : decision.missingRequirementIDs)
+            }
+        }
+        try Task.checkCancellation()
+        return (selection, credentials, scheme.kind, model)
     }
 }
 

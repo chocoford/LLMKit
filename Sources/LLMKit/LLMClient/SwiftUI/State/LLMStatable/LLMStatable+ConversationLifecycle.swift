@@ -73,7 +73,9 @@ extension LLMStatable {
         // 用户主动触发的 compact: 先取消 in-flight 生成, 等任务真正退出, 避免 race。
         await cancelAndAwait(conversationID: conversationID)
 
-        try await _compactConversationCore(conversationID: conversationID, summaryModel: summaryModel)
+        try await withConversationScheme(conversationID) {
+            try await _compactConversationCore(conversationID: conversationID, summaryModel: summaryModel)
+        }
     }
 
     /// compaction 的核心逻辑, 不含"cancel in-flight"。
@@ -190,7 +192,7 @@ extension LLMStatable {
         }.joined(separator: "\n\n")
 
         let response: APIResponse<ChatMessageContent>
-        if client.isDirectBYOK {
+        if client.isDirectBYOK || LLMSchemeScope.provider(for: client) != nil {
             response = try await client.auxiliaryChat(preferredModel: model, platformModel: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")
         } else {
             response = try await client.chat(model: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")

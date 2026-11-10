@@ -335,6 +335,29 @@ use descriptor capabilities/model metadata only for local UI/context-budget hint
 nil or equal to schemeID. `LLMState`'s existing model-only conversation API remains unchanged;
 Apps opt into the Scheme APIs/adapter explicitly rather than silently changing saved conversations.
 
+For the existing state-layer loop, wrap **creation** in `client.withScheme(selection, billing:)`.
+It persists a non-secret `Conversation.schemeConnection`; subsequent send/regenerate/resume/compact
+calls automatically resolve that route. Default platform profiles are resolved and pinned before
+uploads. A conflicting explicit scope fails instead of changing a saved conversation's route.
+To intentionally change a platform Profile or BYOK model while idle, call
+`state.updateSchemeConnection(_:in:)` before the next send. Scheme, billing source and connection
+identity must stay unchanged; switching those requires a new conversation. Persisted stores opt into
+`LLMSchemeConversationPersistenceProvider` to atomically update that field. Unsupported/failed writes
+keep the old selection, and sending is blocked while a routing update is being saved.
+
+For persisted BYOK Scheme conversations, pass `connectionID:` to `withScheme` and inject
+`schemeCredentialsProvider: (connectionID, model) async throws -> LLMBYOKCredentials` when creating
+`LLMState` or `LLMStateObject`. Resolve the saved connection by ID, never the UI's current selection.
+Keys remain memory-only. Each generation reauthenticates and snapshots credentials once, shared by
+tool rounds, overflow retries, titles and summaries; missing credentials fail without platform fallback.
+Auxiliary calls keep their own prompts and do not execute the drawing Scheme's tools.
+
+Scheme preflight checks the actual billing/resource/profile through `/access/evaluate` before uploads
+or retry history deletion, even without a host accessPolicy callback. Invocation still rechecks on the
+server. Custom persistence must round-trip `schemeConnection` (old records decode it as nil).
+No `PersistenceProvider` or Core protocol change is needed. See the
+[state-layer integration guide](Docs/ExcalidrawZ-Integration.md#接入现有工具和会话状态) for App setup.
+
 Billing is required explicitly: `.platform` does not read provider keys; `.byok(model:)` requires
 credentials and a selection without profileID. A nil/missing credential source throws, never bills
 the platform. Image-scheme BYOK currently returns unsupported. Direct clients reject all server

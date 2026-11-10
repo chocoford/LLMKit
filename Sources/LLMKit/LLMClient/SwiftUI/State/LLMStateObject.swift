@@ -44,6 +44,8 @@ public final class LLMStateObject: ObservableObject, @MainActor LLMStatable {
     /// 暴露给外部只读: UI 渲染历史消息里的 toolCalls 时, 用它按 name 反查 Tool 拿 displayName。
     public internal(set) var toolRegistry: ToolRegistry
     var persistenceProvider: (any PersistenceProvider)?
+    let schemeCredentialsProvider: LLMSchemeConversationCredentialsProvider?
+    @Published var schemeConnectionUpdates: Set<String> = []
 
     /// 流式 chunk 写入 messages 的频率策略, 详见 `StreamPublishStrategy`。
     public let streamPublishStrategy: StreamPublishStrategy
@@ -52,12 +54,14 @@ public final class LLMStateObject: ObservableObject, @MainActor LLMStatable {
         llmClient: LLMClient,
         toolRegistry: ToolRegistry = ToolRegistry(),
         persistenceProvider: PersistenceProvider?,
-        streamPublishStrategy: StreamPublishStrategy = .immediate
+        streamPublishStrategy: StreamPublishStrategy = .immediate,
+        schemeCredentialsProvider: LLMSchemeConversationCredentialsProvider? = nil
     ) {
         self.llmClient = llmClient
         self.toolRegistry = toolRegistry
         self.persistenceProvider = persistenceProvider
         self.streamPublishStrategy = streamPublishStrategy
+        self.schemeCredentialsProvider = schemeCredentialsProvider
         // 默认 approval handler 桥到 publisher 模式 (详见 LLMState.init 同段注释)。
         self.toolApprovalHandler = nil
         self.toolApprovalHandler = { [weak self] request in
@@ -183,6 +187,11 @@ public final class LLMStateObject: ObservableObject, @MainActor LLMStatable {
 
     public func configurePersistenceProvider(_ provider: PersistenceProvider) {
         self._configurePersistenceProvider(provider)
+    }
+
+    /// Explicit model selection while idle; Scheme, billing source and connection stay unchanged.
+    public func updateSchemeConnection(_ binding: LLMSchemeConversationBinding, in conversationID: String) async throws {
+        try await _updateSchemeConnection(binding, in: conversationID)
     }
 
     public func createConversation<Metadata: Codable & Equatable & Sendable>(

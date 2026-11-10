@@ -72,6 +72,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var lastChatAt: Date
     /// nil denotes an existing backend conversation. API keys are never serialized here.
     public var directConnection: LLMDirectConversationBinding?
+    /// nil preserves legacy routing. Contains no key; custom persistence must retain this field.
+    public var schemeConnection: LLMSchemeConversationBinding?
 
     public init(
         id: String = UUID().uuidString,
@@ -81,7 +83,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         messages: [ChatMessage] = [],
         createdAt: Date,
         lastChatAt: Date,
-        directConnection: LLMDirectConversationBinding? = nil
+        directConnection: LLMDirectConversationBinding? = nil,
+        schemeConnection: LLMSchemeConversationBinding? = nil
     ) {
         self.id = id
         self.type = type
@@ -91,5 +94,6 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.lastChatAt = lastChatAt
         self.directConnection = directConnection
+        self.schemeConnection = schemeConnection
     }
 }

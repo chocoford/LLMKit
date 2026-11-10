@@ -52,6 +52,9 @@ extension LLMClient {
 
     func summaryModel(for conversation: Conversation, requested: SupportedModel) throws -> SupportedModel {
         try validateConnection(for: conversation)
+        if let provider = LLMSchemeScope.provider(for: self) {
+            return provider.auxiliaryModel(fallback: requested)
+        }
         if let directClient, let binding = conversation.directConnection {
             return directClient.auxiliaryModel(fallback: binding.chatModel)
         }

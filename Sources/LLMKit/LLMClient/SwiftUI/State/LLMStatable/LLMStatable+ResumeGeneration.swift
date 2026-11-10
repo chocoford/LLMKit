@@ -22,14 +22,16 @@ extension LLMStatable {
     ) async throws {
         let task = Task<Void, Error> { [weak self] in
             guard let self else { return }
-            try await self._resumeGenerationBody(
-                in: conversationID,
-                model: model,
-                stream: stream,
-                metadata: metadata,
-                invocationContext: invocationContext,
-                replyTransformer: replyTransformer
-            )
+            try await self.withConversationScheme(conversationID) {
+                try await self._resumeGenerationBody(
+                    in: conversationID,
+                    model: model,
+                    stream: stream,
+                    metadata: metadata,
+                    invocationContext: invocationContext,
+                    replyTransformer: replyTransformer
+                )
+            }
         }
         self.inflightTasks[conversationID] = task
         defer {

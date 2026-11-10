@@ -60,12 +60,13 @@ public final class LLMClient: Sendable {
         uploadProvider: (any LLMFileUploadProvider)? = nil,
         uploadPolicy: LLMUploadPolicy? = nil,
         baseURL: URL,
+        session: URLSession = .shared,
         byokCredentialsProvider: LLMBYOKCredentialsProvider? = nil,
         byokModelCredentialsProvider: LLMBYOKModelCredentialsProvider? = nil,
         byokProvider: LLMBYOKProvider? = nil,
         accessPolicy: LLMAccessPolicyProvider? = nil
     ) {
-        self.networking = LLMNetworking(baseURL: baseURL)
+        self.networking = LLMNetworking(baseURL: baseURL, session: session)
         let authStateChangedPublisher = PassthroughSubject<Bool, Never>()
         self.authManager = LLMAuthManager(provider: authProvider) {
             authStateChangedPublisher.send($0)
@@ -245,6 +246,10 @@ public final class LLMClient: Sendable {
 
     func inferenceCredentials(for model: SupportedModel, agentID: String? = nil) async throws -> LLMBYOKCredentials? {
         if let directClient { return try await directClient.provider.credentials() }
+        if let provider = LLMSchemeScope.provider(for: self), let credentials = provider.credentials {
+            try provider.validateAgent(agentID)
+            return credentials.value // Includes an explicitly pinned nil for platform billing.
+        }
         let credentials = try await modelCredentials(for: model)
         let billing: LLMAccessBillingSource = credentials == nil ? .platform : .byok
         try await authorizeAccess(.init(resource: .init(kind: "inference", id: "chat", billingSource: billing), model: model))

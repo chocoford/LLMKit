@@ -15,15 +15,17 @@ extension LLMClient {
     /// Admission and key resolution happen before the operation (including attachment uploads).
     /// The Scheme, profile, billing and credentials remain fixed across tool rounds and overflow
     /// recovery. Outside this scope the state layer retains its legacy behavior.
-    /// Titles/summaries remain auxiliary requests; hosts must scope their billing explicitly.
+    /// Titles/summaries use the same billing/credential snapshot, without the Scheme's prompt.
+    /// Supply a stable connectionID for BYOK conversations that will be persisted/restored.
     @MainActor
     public func withScheme<Result>(
         _ selection: LLMSchemeSelection,
         billing: LLMSchemeBilling,
+        connectionID: String? = nil,
         operation: @MainActor () async throws -> Result
     ) async throws -> Result {
         try Task.checkCancellation()
-        let provider = try await LLMSchemeProvider(client: self, selection: selection, billing: billing).prepared()
+        let provider = try await LLMSchemeProvider(client: self, selection: selection, billing: billing, connectionID: connectionID).prepared()
         try Task.checkCancellation()
         return try await LLMSchemeScope.$provider.withValue(provider) {
             try await operation()

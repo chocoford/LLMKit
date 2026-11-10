@@ -6,7 +6,7 @@
 
 - 旧客户端回归基线：已发布的 ExcalidrawZ 2.5.1。
 - 新后端应包含 `4768cfb` 和 `3e36e39`，并完成 V4 的 `CreateAppExecutionCatalogs` 迁移。提交完成不代表已经部署。
-- 第二阶段的 Scheme API 使用包含 `7ce4ed0` 的 LLMKit，以及包含 `b87f675` 的 LLMCore。第一阶段不要为此升级旧 App 的 SDK。
+- 第二阶段需要本次完整状态层桥接版本的 LLMKit，以及包含 `b87f675` 的 LLMCore。仅有 `7ce4ed0` 的请求 API 或 `df1f51e` 的基础 scope，不包含下述完整恢复／辅助请求保障。第一阶段不要为此升级旧 App 的 SDK。
 - 本次只讨论经过 LLMServer 的平台助手和 Optimized BYOK。Basic Direct 是另一条独立客户端路径，不作为此次后端升级的前置条件。
 
 ## 第一阶段 保持客户端不变
@@ -64,7 +64,7 @@ let options = scheme.profiles
 - `access` 是平台调用的提示快照，不是授权凭证；服务端在执行时重新鉴权。
 - 登录、退出、购买或恢复订阅、切换环境后刷新菜单与访问状态。
 - Profile 被删除或访问被拒绝时，明确提示，不自动切换到其他模型、计费模式或后端。
-- 对话保存 Scheme/Profile 选择；不要再从模型字符串反推档位。路由信息可以放在 App 自己的会话存储中，不要求改 LLMCore。
+- 对话保存 Scheme/Profile 选择；不要再从模型字符串反推档位。SDK 的 `Conversation.schemeConnection` 保存非敏感路由，App 自定义会话存储必须保留这个字段，不要求改 LLMCore。
 
 ### 先验证请求 API
 
@@ -102,19 +102,59 @@ let provider = LLMSchemeProvider(
 let executor = AgentExecutor(llmProvider: provider, toolRegistry: toolRegistry)
 ```
 
-但当前 `LLMState` 的现成会话循环仍创建 `AgentExecutor(llmProvider: llmClient, ...)`。仅升级 SDK、修改菜单，或在外面创建上述 provider，都不会改变 `llmState.createConversation/sendMessage` 的实际路由。把 Profile ID 写进交易 metadata 也不会让它成为授权选择。
+`LLMState` 和 `LLMStateObject` 已复用同一套可选路由桥接。不是给现有方法增加 `scheme:` 参数，也不是只修改交易 metadata。用 `withScheme` 新建会话：
 
-正式接入前需要在 LLMKit 状态层补一个可选的 Scheme 路由桥接。它应满足：
+```swift
+try await client.withScheme(
+    .init(schemeID: "excalidraw-canvas", profileID: selectedProfileID),
+    billing: .platform
+) {
+    try await llmState.createConversation(
+        id: conversationID,
+        model: selectedModelHint, // 兼容参数；实际模型仍由服务端 Profile 决定
+        agentConfig: agentConfig, // agentID 为空或等于 Scheme ID，保留本地工具
+        messages: [.content(.init(role: .user, content: prompt))]
+    )
+}
+```
 
-1. 默认仍走现有 LLMClient，保持旧调用不变；显式 Scheme 选择才使用 LLMSchemeProvider。
-2. 同一次生成固定 Scheme、Profile、计费模式和 BYOK 连接快照，工具后续轮次不得读取另一个界面刚修改的全局选择。
-3. 新建、继续、重试、恢复生成共用同一解析路径，不在 ExcalidrawZ 复制一套 Agent 循环。
-4. 保留现有附件准备、流式消息更新、持久化、审批、取消、错误清理及上下文压缩行为。
-5. Scheme 鉴权预检如有配置，应在附件上传等副作用之前执行；不能沿用旧 Model ID 预检来冒充 Profile 鉴权。
-6. 标题和摘要沿用明确的计费选择。它们不会因为聊天换用了 LLMSchemeProvider，就自动改走 Scheme。
-7. App 的画布会话、checkpoint、撤销和工具权限逻辑保持原样。
+新建时保存 `Conversation.schemeConnection`；省略平台 Profile 时先解析默认 Profile，并保存具体 ID。之后直接调用现有 `sendMessage`、`regenerateMessage`、`resumeGeneration`、`compactConversation`，SDK 自动沿用保存的路由，不读取当前菜单来覆盖历史选择。
 
-这里是桥接需求，不是当前已经存在的 `LLMState` 参数；不要假设可以直接传 `scheme:` 给现有 `createConversation`。第一阶段联调不依赖这项改造。
+用户在同一会话中显式换档位时，在空闲状态更新模型选择，再发送下一条消息：
+
+```swift
+try await llmState.updateSchemeConnection(
+    .init(selection: .init(schemeID: "excalidraw-canvas", profileID: newProfileID), billing: .platform),
+    in: conversationID
+)
+```
+
+同一 BYOK 连接也可用这个方法更换 `billing: .byok(model:)`，保持原 `connectionID`。此方法不能切换 Scheme、计费来源或连接身份；这些变更仍需新建会话。它只保存用户选择，不代表获准使用；下一次生成仍重新鉴权。生成期间拒绝换模型，写入失败保留旧选择。
+
+Optimized BYOK 新建时使用 `billing: .byok(model: selectedModel)` 和稳定的 `connectionID`，不传平台 Profile。首次 `withScheme` 仍从 client 的凭据回调取 Key，因此应放在 App 对该连接固定的 `withSelectedBilling` 范围内。为后续发送／恢复，在状态初始化时注入按 ID 查询的回调：
+
+```swift
+let llmState = LLMState(
+    llmClient: client,
+    toolRegistry: toolRegistry,
+    persistenceProvider: persistenceProvider,
+    schemeCredentialsProvider: { connectionID, model in
+        // App 实现：按保存的 ID 查连接配置和 Keychain，不读当前选中的连接。
+        try await credentialStore.credentials(connectionID: connectionID, model: model)
+    }
+)
+```
+
+此回调返回非可选 `LLMBYOKCredentials`。连接删除、Key 缺失或配置不兼容时抛错；没有回调也明确失败，不读取其他连接或回退平台。
+
+桥接保障与边界：
+
+1. 无 `schemeConnection` 且未显式使用 scope 的旧会话仍走旧接口。App 可显式包裹 `withScheme` 操作旧会话，但 SDK 不自动推断或持久化迁移其路由。
+2. 单次生成固定 Scheme、Profile、计费和凭据，覆盖工具轮次和超限压缩后的自动重试。手动重试／恢复是新生成，按原路由重新取 Key、重新预检。
+3. 上传、重试删除历史等副作用前，按真实 Scheme/Profile 与计费来源检查 `/access/evaluate`；App 还能额外提供本地 accessPolicy。服务端执行时仍重新鉴权，预检不是授权凭证。
+4. 标题／摘要使用同一计费和凭据快照，但仍是独立辅助请求，不注入绘图 Scheme 的 Prompt 或执行绘图工具。BYOK 默认使用聊天模型，可配置同连接辅助模型；平台保留原辅助模型选择。
+5. 保留上传、流式更新、持久化、审批、取消、错误清理、压缩和 App 的 checkpoint／撤销。冲突的 Scheme/Profile/计费/连接 scope 报错，不隐式覆盖已绑定会话；会话内换模型使用上述显式更新入口。
+6. 只保存选择与连接 ID，绝不保存 Key。自定义 Core Data／SQLite／文档存储必须保留并恢复可选 `schemeConnection`；旧记录缺字段按 nil 读取。非整份 Codable 存储需要 App 补字段映射和自己的存储迁移。SDK 没有修改原 `PersistenceProvider` 协议或 LLMCore。若要支持已保存会话换模型，存储实现还需遵循可选子协议 `LLMSchemeConversationPersistenceProvider`，用 `updateSchemeConnection(_:in:)` 原子更新既有记录的路由字段；未升级的实现仍可聊天，但换模型会明确报错，不会只改内存而丢失持久化。
 
 ### Optimized BYOK
 
@@ -129,7 +169,7 @@ let stream = try await client.streamScheme(
 )
 ```
 
-- 在 App 现有的 `withSelectedBilling` 快照范围内执行整次操作。
+- 首次绑定、直接调用请求 API 或操作未绑定旧会话时，仍使用 App 的 `withSelectedBilling` 快照。已绑定会话由 SDK 根据保存的路由及 `schemeCredentialsProvider` 管理生成快照。
 - 缺失 Key 应抛错；不要返回 nil 并静默转成平台付费。
 - 模型列表通过 `listBYOKModels` 查询，仅作提示，允许手动输入合法 ID。
 - `getScheme` 返回的逐 Profile `access` 是平台权限，不用它判断 BYOK 权限。BYOK 检查独立的 `inference/chat` BYOK 门槛，不叠加 Canvas／平台模型的订阅条件，也不带平台 Profile ID。Scheme 必须可用；共同的禁用规则、App 资源绑定和显式 BYOK 访问规则仍然生效。
@@ -165,6 +205,6 @@ Basic Direct 不使用这些 Scheme API。它需要独立 Direct client、本地
 
 ## 建议交接顺序
 
-先交付第一阶段回归结果，再补 LLMKit 状态层桥接，最后改 ExcalidrawZ 动态菜单和请求路由。第二阶段重跑第一阶段的全部用例，确保新接入没有破坏原有画布和会话能力。
+先交付第一阶段回归结果，再升级包含完整状态层桥接的 LLMKit，最后改 ExcalidrawZ 动态菜单、首次绑定和凭据恢复／存储映射。第二阶段重跑第一阶段的全部用例，确保新接入没有破坏原有画布和会话能力。
 
 客户端改造主要涉及 App 里的 `ExcalidrawZApp.swift`、`AIInferenceBillingState.swift`、`ExcalidrawModelProfileOption.swift`、模型菜单加载、新建/发送入口和重试入口。不要为了接入而重写 LLMCore 的 AgentExecutor 或套餐协议。

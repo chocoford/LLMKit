@@ -36,6 +36,8 @@ extension LLMStatable {
             throw ConversationNotFoundError()
         }
         let llmClient = self.llmClient
+        let schemeProvider = LLMSchemeScope.provider(for: llmClient)
+        let model = schemeProvider?.executionModel ?? model
         try llmClient.validateConnection(for: self.conversations.value![index])
         if llmClient.isDirectBYOK {
             self.conversations.transform { $0[index].directConnection?.chatModel = model }
@@ -99,7 +101,6 @@ extension LLMStatable {
         do {
             // The state layer prepares/persists images before AgentExecutor calls chat().
             // Apply the host's optional admission check before those upload side effects too.
-            let schemeProvider = LLMSchemeScope.provider(for: llmClient)
             try schemeProvider?.validateAgent(self.conversations.value![index].agentConfig.agentID)
             if schemeProvider == nil, llmClient.accessPolicy != nil, !llmClient.isDirectBYOK {
                 _ = try await llmClient.inferenceCredentials(for: model, agentID: self.conversations.value![index].agentConfig.agentID)

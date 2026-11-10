@@ -22,6 +22,26 @@ extension LLMStatable {
         invocationContext: (any ChatInvocationContext)? = nil,
         replyTransformer: ((_ assistantMessage: ChatMessage) async throws -> ChatMessage)? = nil
     ) async throws {
+        try await withConversationScheme {
+            try LLMSchemeScope.provider(for: llmClient)?.validateAgent(agentConfig.agentID)
+            try await _createConversationBody(id: id, type: type, model: model, agentConfig: agentConfig,
+                appendingPrompt: appendingPrompt, messages: messages, stream: stream, metadata: metadata,
+                invocationContext: invocationContext, replyTransformer: replyTransformer)
+        }
+    }
+
+    private func _createConversationBody<Metadata: Codable & Equatable & Sendable>(
+        id: String,
+        type: Conversation.ConversationTpye,
+        model: SupportedModel,
+        agentConfig: AgentConfig,
+        appendingPrompt: String?,
+        messages: [ChatMessage],
+        stream: Bool,
+        metadata: Metadata,
+        invocationContext: (any ChatInvocationContext)?,
+        replyTransformer: ((_ assistantMessage: ChatMessage) async throws -> ChatMessage)?
+    ) async throws {
         guard case .loaded = conversations else {
             throw ConversationNotReadyError()
         }
@@ -38,7 +58,8 @@ extension LLMStatable {
             title: "New conversation",
             createdAt: .now,
             lastChatAt: .now,
-            directConnection: llmClient.directClient.map { .init(configuration: $0.provider.configuration, chatModel: model) }
+            directConnection: llmClient.directClient.map { .init(configuration: $0.provider.configuration, chatModel: model) },
+            schemeConnection: LLMSchemeScope.provider(for: llmClient)?.conversationBinding
         )
         await MainActor.run {
             self.conversations.transform {
