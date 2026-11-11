@@ -146,10 +146,11 @@ final class LLMDirectClient: Sendable {
                         case .data(let data):
                             let update = try accumulator.append(data)
                             if update != nil { hasMessage = true }
-                            if hasMessage, update != nil || record.tokens != accumulator.usage {
+                            if hasMessage, update != nil || record.tokens != accumulator.usage || record.providerToolUsage != accumulator.providerToolUsage {
                                 record.responseID = accumulator.currentMessage.id
                                 record.modelID = accumulator.modelID ?? record.modelID
                                 record.tokens = accumulator.usage
+                                record.providerToolUsage = accumulator.providerToolUsage
                                 var message = accumulator.currentMessage
                                 message.inferenceUsage = [record]
                                 continuation.yield(.message(message))

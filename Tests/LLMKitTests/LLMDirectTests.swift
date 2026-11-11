@@ -5,6 +5,35 @@ import LLMCore
 
 @Suite("Direct BYOK isolation and transport")
 struct LLMDirectTests {
+    @Test("Direct streams retain upstream citations and search meters without search configuration")
+    @MainActor
+    func hostedSearchMetadata() async throws {
+        let wire = "data: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"annotations\":[{\"type\":\"url_citation\",\"url_citation\":{\"url\":\"https://example.com/news\",\"title\":\"News\"}}]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3,\"server_tool_use_details\":{\"web_search_requests\":2}}}\n\ndata: [DONE]\n\n"
+        try await withDirectFixture([.sse(wire)]) { client, id, _ in
+            let state = LLMStateObject(llmClient: client, persistenceProvider: nil)
+            var firstReplies = 0
+            let reply = try await state._temporaryChat(model: .other("any-model"), messages: [.content(.init(role: .user, content: "News"))],
+                onUpdate: { _ in }, onFirstReply: { _ in firstReplies += 1 })
+            #expect(reply.content == "Answer" && firstReplies == 1)
+            #expect(reply.citations?.count == 1)
+            #expect(reply.usageSummary.providerToolUsage?["web_search_requests"] == 2)
+            #expect(reply.usage == nil)
+            let request = try #require(DirectFixtureProtocol.store.requests(id).first)
+            let body = try Self.payload(request)
+            #expect(body["tools"] == nil && body["web_search_options"] == nil && body["enable_search"] == nil)
+        }
+    }
+
+    @Test("Auxiliary requests do not configure upstream search")
+    func auxiliaryRequestsDoNotConfigureSearch() async throws {
+        try await withDirectFixture([.json(Self.answer)]) { client, id, _ in
+            _ = try await client.auxiliaryChat(preferredModel: .other("chat"), platformModel: .gpt4o, system: "Title", text: "Hello")
+            let request = try #require(DirectFixtureProtocol.store.requests(id).first)
+            let body = try Self.payload(request)
+            #expect(body["tools"] == nil && body["web_search_options"] == nil && body["enable_search"] == nil)
+        }
+    }
+
     @Test("Preset requests carry only the upstream key, never App auth or backend headers", arguments: LLMBYOKPreset.allCases)
     func presetRequests(preset: LLMBYOKPreset) throws {
         let provider = LLMBYOKProvider(configuration: preset.configuration) { "direct-secret" }

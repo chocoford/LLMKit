@@ -54,6 +54,7 @@ extension LLMStatable {
                             resMessage?.content = newContent
                             if var message = resMessage, case .content(var content) = message {
                                 for record in result.inferenceUsage ?? [] { content.recordInferenceUsage(record) }
+                                content.mergeCitations(result.citations ?? [])
                                 message = .content(content)
                                 resMessage = message
                             }

@@ -129,7 +129,8 @@ extension LLMStatable {
             role: .user,
             content: "[Summary of earlier conversation]\n\n\(summary.content ?? "")",
             isCompactSummary: true,
-            inferenceUsage: summary.inferenceUsage
+            inferenceUsage: summary.inferenceUsage,
+            citations: summary.citations
         )
         let summaryMessage = ChatMessage.content(summaryContent)
 
@@ -194,13 +195,8 @@ extension LLMStatable {
             return "\(label) \(parts.joined(separator: " "))"
         }.joined(separator: "\n\n")
 
-        let response: APIResponse<ChatMessageContent>
-        if client.isDirectBYOK || LLMSchemeScope.provider(for: client) != nil {
-            response = try await client.auxiliaryChat(preferredModel: model, platformModel: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)", purpose: "summary")
-        } else {
-            let result = try await client.chat(model: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")
-            response = result.classifyingUsage(purpose: "summary", model: model, billingSource: .platform)
-        }
+        let response = try await client.auxiliaryChat(preferredModel: model, platformModel: model,
+            system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)", purpose: "summary")
         guard let summary = response.data, summary.content?.isEmpty == false else {
             if let anchorID = messages.last?.id {
                 try await recordAuxiliaryUsage(response.data?.inferenceUsage ?? [], in: conversationID, messageID: anchorID)

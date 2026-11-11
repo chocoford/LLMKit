@@ -274,6 +274,7 @@ extension LLMStatable {
                 if transformedMessage.inferenceUsage == nil {
                     transformedMessage.inferenceUsage = finalMessage.inferenceUsage
                 }
+                if transformedMessage.citations == nil { transformedMessage.citations = finalMessage.citations }
             }
 
             if case .content(let content) = transformedMessage {

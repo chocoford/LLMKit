@@ -129,6 +129,7 @@ public actor LLMNetworking {
                     let usesBYOK = request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") != nil
                     let delegate: (any URLSessionTaskDelegate)? = usesBYOK ? LLMBYOKRedirectDelegate() : nil
                     let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
+                    defer { bytes.task.cancel() }
                     if let http = response as? HTTPURLResponse,
                        !(200..<300).contains(http.statusCode) {
                         // 非 2xx: 把 body 收完(错误响应通常很短的 JSON)再抛 LLMError,

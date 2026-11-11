@@ -75,6 +75,52 @@ its remaining networking/TLS configuration and lifetime are managed by the host 
 Pass a compatible selected model explicitly to `ask`; its existing OpenAI default is not
 automatically substituted with a vendor-specific model.
 
+## Upstream result metadata (Basic / Optimized BYOK)
+
+No search setting or additional provider setup is required in the App. The SDK does not
+add search flags, plugins or hosted-tool declarations, and does not enable or disable
+upstream search. Availability and execution belong to the selected upstream model/service.
+If an endpoint requires request-specific opt-in, this generic path does not supply it:
+response compatibility alone does not make that capability available.
+
+Both Direct and backend BYOK normalize recognized source and tool-usage metadata returned
+alongside valid Chat Completions responses. This is passive result handling, not a switch
+to a provider's native Responses/Messages API or an arbitrary request-body passthrough.
+Models remain unrestricted; upstream failures surface without switching models, providers
+or falling back to platform inference/search. Custom Domain Agent endpoints retain their
+existing server-side host approval requirement.
+
+Normalized upstream URLs/titles are available as `reply.citations`. They are merged across
+streaming metadata frames, retained in Agent/state messages and Codable history, and never
+fetched by the SDK. Unsafe URL schemes/embedded credentials are discarded. These are source
+links, not a claim that every provider exposes citation offsets or a complete source list.
+If a provider only puts citations in text, the text stays intact; no source URLs are invented.
+Stores with explicit field mappings must also persist the optional `citations` field.
+
+Provider-reported tool meters are available separately from tokens:
+
+```swift
+let searches = conversation.usageSummary(forMessageID: reply.id)
+    .providerToolUsage?["web_search_requests"] // nil = not reported, not zero
+```
+
+The SDK preserves reported counters and deduplicates them by model request. It does not
+estimate fees from token counts or infer a search count from the number of source links.
+Counters may be partial when the provider omits meters for some requests; nil is unknown,
+not zero. Title/summary requests follow the same passive policy, so the SDK does not
+promise to prevent an upstream service from searching or charging for its own tools.
+
+App-registered local functions and LLMServer's `/tools/web-search` remain separate tools
+with their own execution, permission and billing policies. Hosted result metadata never
+triggers a local tool or platform search request.
+
+App integration only needs to display optional `citations` / `providerToolUsage` when
+present and preserve them in history. There is no capability acknowledgement header or
+additional handshake. Updated Server is needed to forward the metadata for Optimized BYOK;
+old servers remain usable but cannot provide fields they never sent. DONE, cancellation,
+tool-argument integrity and existing credit semantics are unchanged. No database migration
+is needed.
+
 ## Actual token usage (Basic / Optimized BYOK)
 
 Actual model usage is separate from platform credits. `ChatMessageContent.usage` and

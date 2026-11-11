@@ -7,6 +7,37 @@ import Testing
 struct LLMBYOKTests {
     private let credentials = LLMBYOKCredentials(configuration: .openRouter, apiKey: "test-user-key")
 
+    @Test("Backend citations and tool meters need no search configuration or acknowledgement", arguments: [false, true])
+    func upstreamMetadata(streaming: Bool) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BYOKMetadataProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let networking = LLMNetworking(session: session)
+        await networking.setToken("app-token")
+        let selected = LLMBYOKCredentials(configuration: .openAI, apiKey: "synthetic-key")
+        var messages: [ChatMessageContent] = []
+        if streaming {
+            let stream = try await networking.streamInference("/chat/stream", body: ["model": "any-model"], credentials: selected)
+            for try await event in stream {
+                if case .message(let message) = event { messages.append(message) }
+            }
+        } else {
+            let response: APIResponse<ChatMessageContent> = try await networking.postInference("/chat",
+                body: ["model": "any-model"], credentials: selected)
+            messages.append(try #require(response.data))
+        }
+        #expect(messages.count == 1)
+        let message = try #require(messages.first)
+        #expect(message.citations?.first?.url.absoluteString == "https://example.com/news")
+        #expect(message.usageSummary.providerToolUsage?["web_search_requests"] == 2)
+        #expect(message.usageSummary.tokens?.totalTokens == 3)
+        #expect(message.usage == nil)
+        let restored = try JSONDecoder().decode(ChatMessageContent.self, from: JSONEncoder().encode(message))
+        #expect(restored.citations == message.citations)
+        #expect(restored.inferenceUsage == message.inferenceUsage)
+    }
+
     @Test("Keys travel in headers, never in the body, and don't replace app authentication")
     func credentialsStayOutOfBody() async throws {
         let networking = LLMNetworking()
@@ -360,6 +391,22 @@ private final class BYOKStreamErrorProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         let frame = "event: error\ndata: {\"error\":{\"code\":502,\"message\":\"Your BYOK OpenRouter account has insufficient credits.\"}}\n\n"
         client?.urlProtocol(self, didLoad: Data(frame.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private final class BYOKMetadataProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let message = #"{"id":"r","role":"assistant","content":"Answer","citations":[{"url":"https://example.com/news","title":"News"}],"inferenceUsage":[{"id":"usage-r","billingSource":"byok","purpose":"chat","tokens":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3},"isComplete":true,"providerToolUsage":{"web_search_requests":2}}]}"#
+        let streaming = request.url?.path.hasSuffix("/stream") == true
+        let headers = ["Content-Type": streaming ? "text/event-stream" : "application/json"]
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let body = streaming ? "data: \(message)\n\ndata: [DONE]\n\n" : "{\"data\":\(message)}"
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
