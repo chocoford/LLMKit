@@ -5,6 +5,29 @@ import LLMCore
 
 @Suite("Direct BYOK isolation and transport")
 struct LLMDirectTests {
+    @Test("Explicit hosted search preserves Direct conversation binding and does not opt auxiliary calls in")
+    func searchRequests() async throws {
+        try await withDirectFixture([.json(Self.answer), .json(Self.answer)], configure: {
+            $0.webSearch = .init(adapter: .groq, isEnabled: true)
+        }) { client, id, configuration in
+            let local = ToolSchema(name: "draw", description: "Local", parameters: .init(["type": "object"]))
+            _ = try await client.chat(model: .other("any-model"), text: "News", tools: [local])
+            _ = try await client.auxiliaryChat(preferredModel: .other("chat"), platformModel: .gpt4o, system: "Title", text: "News")
+            let requests = DirectFixtureProtocol.store.requests(id)
+            #expect(requests.count == 2)
+            let chat = try Self.payload(try #require(requests.first))
+            let tools = try #require(chat["tools"] as? [[String: Any]])
+            #expect(tools.count == 2 && tools.last?["type"] as? String == "browser_search")
+            let auxiliary = try Self.payload(try #require(requests.last))
+            #expect(auxiliary["tools"] == nil && auxiliary["web_search_options"] == nil && auxiliary["enable_search"] == nil)
+            var old = configuration
+            old.webSearch = nil
+            let conversation = Conversation(type: .regular, title: "Old binding", createdAt: .now, lastChatAt: .now,
+                directConnection: .init(configuration: old, chatModel: .other("any-model")))
+            try client.validateConnection(for: conversation)
+        }
+    }
+
     @Test("Direct streams retain upstream citations and search meters without search configuration")
     @MainActor
     func hostedSearchMetadata() async throws {

@@ -3,6 +3,8 @@ import LLMCore
 
 public typealias LLMBYOKConfiguration = LLMCore.LLMBYOKConfiguration
 public typealias LLMBYOKPreset = LLMCore.LLMBYOKPreset
+public typealias LLMBYOKWebSearch = LLMCore.LLMBYOKWebSearch
+public typealias LLMBYOKWebSearchError = LLMCore.LLMBYOKWebSearchError
 
 /// Request-only credentials. This type deliberately does not conform to Codable.
 ///
@@ -61,6 +63,14 @@ public struct LLMBYOKCredentials: Sendable, CustomStringConvertible, CustomDebug
             throw LLMBYOKConfigurationError.invalidAPIKey
         }
         return key
+    }
+
+    /// Auxiliary requests keep the same key/model mapping without adding paid search.
+    /// This does not disable search inherent in the selected service/model.
+    func withoutHostedSearch() throws -> Self {
+        var copy = configuration
+        copy.webSearch?.isEnabled = false
+        return .init(configuration: copy, apiKey: try validatedAPIKey())
     }
 }
 

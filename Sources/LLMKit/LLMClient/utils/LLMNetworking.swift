@@ -92,6 +92,9 @@ public actor LLMNetworking {
         let delegate: (any URLSessionTaskDelegate)? = credentials == nil ? nil : LLMBYOKRedirectDelegate()
         let (data, response) = try await session.data(for: request, delegate: delegate)
         try validate(response: response, data: data)
+        if request.url?.path.hasSuffix("/models") != true {
+            try Self.validateSearchAcknowledgement(response, expected: credentials?.configuration.webSearch)
+        }
         return try decode(U.self, from: data)
     }
 
@@ -119,10 +122,10 @@ public actor LLMNetworking {
         credentials: LLMBYOKCredentials?
     ) throws -> AsyncThrowingStream<StreamChatResponse, Error> {
         let request = try makeRequest(endpoint: endpoint, method: "POST", body: body, credentials: credentials)
-        return responseStream(for: request)
+        return responseStream(for: request, expectedSearch: credentials?.configuration.webSearch)
     }
 
-    private func responseStream(for request: URLRequest) -> AsyncThrowingStream<StreamChatResponse, Error> {
+    private func responseStream(for request: URLRequest, expectedSearch: LLMBYOKWebSearch? = nil) -> AsyncThrowingStream<StreamChatResponse, Error> {
         return AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
@@ -142,6 +145,7 @@ public actor LLMNetworking {
                         }
                         throw LLMError.fromHTTP(statusCode: http.statusCode, body: bodyData)
                     }
+                    try Self.validateSearchAcknowledgement(response, expected: expectedSearch)
 
                     if usesBYOK || request.url?.path == "/schemes/stream" {
                         var decoder = LLMBYOKStreamDecoder<StreamChatResponse>()
@@ -200,6 +204,13 @@ public actor LLMNetworking {
     }
 
     // MARK: - Helpers
+    private static func validateSearchAcknowledgement(_ response: URLResponse, expected: LLMBYOKWebSearch?) throws {
+        guard let expected, expected.isEnabled else { return }
+        guard (response as? HTTPURLResponse)?.value(forHTTPHeaderField: LLMBYOKWebSearch.acknowledgementHeader) == expected.adapter.rawValue else {
+            throw LLMError.server(statusCode: 501, message: "This LLMServer version did not acknowledge upstream web search. The request may already have incurred upstream charges. No fallback was attempted.")
+        }
+    }
+
     private func decode<T: Decodable>(
         _ type: T.Type,
         from data: Data

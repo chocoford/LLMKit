@@ -44,7 +44,7 @@ extension LLMClient {
     func validateConnection(for conversation: Conversation) throws {
         switch (directClient, conversation.directConnection) {
         case (nil, nil): return
-        case (.some(let client), .some(let binding)) where client.provider.configuration == binding.configuration:
+        case (.some(let client), .some(let binding)) where client.provider.configuration.hasSameConnection(as: binding.configuration):
             try validateAgentForCurrentMode(conversation.agentConfig.agentID)
         default: throw LLMDirectError.conversationConnectionMismatch
         }
@@ -98,7 +98,9 @@ final class LLMDirectClient: Sendable {
         let credentials = try await provider.credentials()
         try Task.checkCancellation()
         var request = try makeRequest(credentials: credentials, catalog: false)
-        request.httpBody = try LLMChatCompletionsCodec.encode(model: model.rawValue, messages: includeBasePrompt ? withPrompt(messages) : messages, tools: tools, configuration: credentials.configuration, stream: false)
+        var configuration = credentials.configuration
+        if !includeBasePrompt { configuration.webSearch?.isEnabled = false }
+        request.httpBody = try LLMChatCompletionsCodec.encode(model: model.rawValue, messages: includeBasePrompt ? withPrompt(messages) : messages, tools: tools, configuration: configuration, stream: false)
         let data = try await responseData(for: request, limit: 16 * 1024 * 1024)
         var response = try LLMChatCompletionsCodec.decode(data)
         if var message = response.data {

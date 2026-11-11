@@ -75,17 +75,57 @@ its remaining networking/TLS configuration and lifetime are managed by the host 
 Pass a compatible selected model explicitly to `ask`; its existing OpenAI default is not
 automatically substituted with a vendor-specific model.
 
-## Upstream result metadata (Basic / Optimized BYOK)
+## Upstream web search (Basic / Optimized BYOK)
 
-No search setting or additional provider setup is required in the App. The SDK does not
-add search flags, plugins or hosted-tool declarations, and does not enable or disable
-upstream search. Availability and execution belong to the selected upstream model/service.
-If an endpoint requires request-specific opt-in, this generic path does not supply it:
-response compatibility alone does not make that capability available.
+Search has two separate layers: the App can opt into the upstream capability, then the
+upstream determines execution according to its API/model contract. Supporting search
+results alone does not enable a capability that requires a per-request declaration.
+Presets and old saved configurations default to **no additional search declaration**.
+
+```swift
+let selected = LLMBYOKConfiguration.openRouter
+let canOfferSearch = selected.webSearchAdapter != nil
+let isOn = selected.webSearch?.isEnabled ?? false
+let behavior = selected.webSearchAdapter?.executionBehavior
+
+// Apply the App/user's switch when selecting the provider for the next generation.
+let configuration = try selected.withWebSearch(enabled: userWantsSearch)
+let provider = LLMBYOKProvider(configuration: configuration, apiKeyProvider: readAPIKey)
+let basic = LLMClient(directBYOK: provider)
+let optimized = LLMClient(authProvider: appAuth, byokProvider: provider)
+```
+
+`webSearchAdapter` indicates a supported wire format, not permission or availability for
+every model/account/region. An unsupported connection throws `LLMBYOKWebSearchError` when
+enabling the switch; disabling remains a no-op. Custom gateways may explicitly set
+`webSearch: .init(adapter: .dashScope, isEnabled: true)` in their connection configuration.
+
+| Preset | Explicit request opt-in | Execution behavior for App UI |
+| --- | --- | --- |
+| OpenRouter | `tools: [{type: "openrouter:web_search"}]` | `modelDecides`: the model may search zero or more times. |
+| OpenAI | `web_search_options: {}` | `alwaysSearch`: requires a compatible specialized search model; this Chat Completions path searches on every request. |
+| DashScope / International | `enable_search: true` | `providerDefined`: model/region/API rules apply. |
+| Groq | `tools: [{type: "browser_search"}]` | `providerDefined`: requires a compatible Browser Search model. |
+
+Do not label all providers as "AI automatically decides whether to search". In particular,
+OpenAI's optional model-decided search uses Responses, which is not this SDK's current
+Chat Completions path. The switch never converts the endpoint or substitutes another model.
+References: [OpenRouter](https://openrouter.ai/tool/web-search/),
+[OpenAI Docs](https://developers.openai.com/api/docs/guides/tools-web-search),
+[DashScope](https://www.alibabacloud.com/help/en/model-studio/web-search),
+[Groq](https://console.groq.com/docs/tool-use/built-in-tools/browser-search).
+
+Switch off means **do not add this opt-in**, not "guarantee no upstream search": a selected
+model or account default may search inherently. Switch on may incur provider tool fees in
+addition to model tokens, billed to the user's upstream account. Local function schemas
+are retained and no forced `tool_choice` is added. Changing this option does not change
+Direct conversation connection identity; use the selected provider/credentials snapshot
+consistently for all rounds of a generation.
 
 Both Direct and backend BYOK normalize recognized source and tool-usage metadata returned
-alongside valid Chat Completions responses. This is passive result handling, not a switch
-to a provider's native Responses/Messages API or an arbitrary request-body passthrough.
+alongside valid Chat Completions responses, regardless of whether the switch is on.
+This result handling is not a switch to a native Responses/Messages API or an arbitrary
+request-body passthrough.
 Models remain unrestricted; upstream failures surface without switching models, providers
 or falling back to platform inference/search. Custom Domain Agent endpoints retain their
 existing server-side host approval requirement.
@@ -107,19 +147,27 @@ let searches = conversation.usageSummary(forMessageID: reply.id)
 The SDK preserves reported counters and deduplicates them by model request. It does not
 estimate fees from token counts or infer a search count from the number of source links.
 Counters may be partial when the provider omits meters for some requests; nil is unknown,
-not zero. Title/summary requests follow the same passive policy, so the SDK does not
-promise to prevent an upstream service from searching or charging for its own tools.
+not zero. Titles/summaries omit the extra search opt-in while retaining their selected
+key/model mapping. This cannot prevent search or tool charges inherent in that upstream
+model/service; select an appropriate same-provider auxiliary model when needed.
 
 App-registered local functions and LLMServer's `/tools/web-search` remain separate tools
 with their own execution, permission and billing policies. Hosted result metadata never
 triggers a local tool or platform search request.
 
-App integration only needs to display optional `citations` / `providerToolUsage` when
-present and preserve them in history. There is no capability acknowledgement header or
-additional handshake. Updated Server is needed to forward the metadata for Optimized BYOK;
-old servers remain usable but cannot provide fields they never sent. DONE, cancellation,
-tool-argument integrity and existing credit semantics are unchanged. No database migration
-is needed.
+App integration can offer the explicit opt-in using `webSearchAdapter` and its behavior,
+and display/persist optional `citations` / `providerToolUsage` as above. Other presets do
+not advertise this option on the current protocol; this does not restrict ordinary chat
+or arbitrary valid model IDs.
+
+Deploy updated Server before enabling Optimized search. When the switch is on, Kit requires
+`X-LLM-BYOK-Web-Search` to acknowledge that Server understood the adapter. Missing/mismatched
+acknowledgement throws 501 instead of accepting a silently ignored option. This check
+occurs after the request: an old server may already have executed and billed the upstream
+call. The header does **not** prove a search ran; only reported tool meters indicate usage.
+Switch-off requests and model discovery do not require acknowledgement. Direct does not
+depend on this backend header. DONE, cancellation, tool integrity, key storage and existing
+platform-credit semantics are unchanged. No database migration is needed.
 
 ## Actual token usage (Basic / Optimized BYOK)
 

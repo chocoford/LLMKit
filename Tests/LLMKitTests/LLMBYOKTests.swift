@@ -7,6 +7,55 @@ import Testing
 struct LLMBYOKTests {
     private let credentials = LLMBYOKCredentials(configuration: .openRouter, apiKey: "test-user-key")
 
+    @Test("Auxiliary requests omit only search opt-in while retaining the key and connection")
+    func auxiliarySearchCredentials() throws {
+        let selected = LLMBYOKCredentials(configuration: try .dashScope.withWebSearch(), apiKey: "snapshotted-key")
+        let auxiliary = try selected.withoutHostedSearch()
+        #expect(selected.configuration.webSearch?.isEnabled == true)
+        #expect(auxiliary.configuration.webSearch?.isEnabled == false)
+        #expect(auxiliary.configuration.hasSameConnection(as: selected.configuration))
+        #expect(try auxiliary.validatedAPIKey() == selected.validatedAPIKey())
+    }
+
+    @Test("Explicit search requires backend acknowledgement, never silently ignored", arguments: [false, true], [false, true])
+    func hostedSearchAcknowledgement(acknowledged: Bool, streaming: Bool) async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BYOKMetadataProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let networking = LLMNetworking(session: session)
+        await networking.setToken(acknowledged ? "search-supported" : "old-server")
+        let selected = LLMBYOKCredentials(configuration: try .openAI.withWebSearch(), apiKey: "synthetic-key")
+        var received = 0
+        do {
+            if streaming {
+                for try await event in try await networking.streamInference("/chat/stream", body: ["model": "any-model"], credentials: selected) {
+                    if case .message = event { received += 1 }
+                }
+            } else {
+                let response: APIResponse<ChatMessageContent> = try await networking.postInference("/chat",
+                    body: ["model": "any-model"], credentials: selected)
+                if response.data != nil { received += 1 }
+            }
+            #expect(acknowledged)
+        } catch LLMError.server(let code, _) {
+            #expect(!acknowledged && code == 501)
+        }
+        #expect(received == (acknowledged ? 1 : 0))
+    }
+
+    @Test("Model discovery does not require search acknowledgement")
+    func discoveryDoesNotInvokeSearch() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BYOKMetadataProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let networking = LLMNetworking(session: session)
+        let response: APIResponse<ChatMessageContent> = try await networking.postInference("/chat/models", body: ["probe": true],
+            credentials: .init(configuration: try .openAI.withWebSearch(), apiKey: "synthetic-key"))
+        #expect(response.data != nil)
+    }
+
     @Test("Backend citations and tool meters need no search configuration or acknowledgement", arguments: [false, true])
     func upstreamMetadata(streaming: Bool) async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -402,7 +451,10 @@ private final class BYOKMetadataProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let message = #"{"id":"r","role":"assistant","content":"Answer","citations":[{"url":"https://example.com/news","title":"News"}],"inferenceUsage":[{"id":"usage-r","billingSource":"byok","purpose":"chat","tokens":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3},"isComplete":true,"providerToolUsage":{"web_search_requests":2}}]}"#
         let streaming = request.url?.path.hasSuffix("/stream") == true
-        let headers = ["Content-Type": streaming ? "text/event-stream" : "application/json"]
+        var headers = ["Content-Type": streaming ? "text/event-stream" : "application/json"]
+        if request.value(forHTTPHeaderField: "Authorization") == "Bearer search-supported" {
+            headers[LLMBYOKWebSearch.acknowledgementHeader] = LLMBYOKWebSearch.Adapter.openAI.rawValue
+        }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         let body = streaming ? "data: \(message)\n\ndata: [DONE]\n\n" : "{\"data\":\(message)}"

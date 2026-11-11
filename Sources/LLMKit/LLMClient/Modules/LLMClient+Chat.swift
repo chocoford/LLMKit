@@ -131,7 +131,7 @@ extension LLMClient {
         } ?? platformModel
         let messages = [ChatMessageContent(role: .system, content: system), .init(role: .user, content: text)]
         let result: APIResponse<ChatMessageContent> = try await networking.postInference(
-            "/chat", body: ChatRequest<EmptyMetadata>(model: model, messages: messages), credentials: credentials
+            "/chat", body: ChatRequest<EmptyMetadata>(model: model, messages: messages), credentials: try credentials?.withoutHostedSearch()
         )
         return result.classifyingUsage(purpose: purpose, model: model, billingSource: credentials == nil ? .platform : .byok)
     }
