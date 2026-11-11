@@ -80,9 +80,13 @@ struct LLMDirectTests {
         }
     }
 
-    @Test("Complete streams emit cumulative snapshots without a settlement event")
-    func completeStream() async throws {
-        try await withDirectFixture([.sse(Self.complete)]) { client, id, _ in
+    @Test("Complete streams, including OpenRouter usage tails, emit no duplicate snapshot or settlement", arguments: [false, true])
+    func completeStream(openRouterUsageTail: Bool) async throws {
+        let tail = "data: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n"
+        let wire = openRouterUsageTail
+            ? Self.complete.replacingOccurrences(of: "data: [DONE]\n\n", with: tail + "data: [DONE]\n\n")
+            : Self.complete
+        try await withDirectFixture([.sse(wire)]) { client, id, _ in
             let stream = try await client.streamChat(model: .other("manual-model"), text: "hello")
             var contents: [String] = []
             for try await event in stream {
@@ -91,8 +95,7 @@ struct LLMDirectTests {
                 case .settlement: Issue.record("Direct must never emit platform settlement")
                 }
             }
-            #expect(contents.first == "H")
-            #expect(contents.last == "Hi")
+            #expect(contents == ["H", "Hi"])
             #expect(DirectFixtureProtocol.store.requests(id).count == 1)
         }
     }

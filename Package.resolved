@@ -43,7 +43,7 @@
       "location" : "https://github.com/chocoford/LLMCore.git",
       "state" : {
         "branch" : "main",
-        "revision" : "b87f6752842c354fd697977203b8bbc4dc329638"
+        "revision" : "c064bb3a856b96ccffbf1c67df41918fb2da8eb4"
       }
     },
     {
@@ -52,7 +52,7 @@
       "location" : "https://github.com/MacPaw/OpenAI.git",
       "state" : {
         "branch" : "main",
-        "revision" : "202022ffb849fbab34e93f8d6cf1b2bbee260ffc"
+        "revision" : "f5d181533a78a21ee50a12b7abc7ce8eba960100"
       }
     },
     {
