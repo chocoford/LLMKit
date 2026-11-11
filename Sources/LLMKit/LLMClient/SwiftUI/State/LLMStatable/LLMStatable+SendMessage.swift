@@ -71,10 +71,14 @@ extension LLMStatable {
             throw NSError(domain: "LLMStatable", code: 3, userInfo: [NSLocalizedDescriptionKey: "No user message found before the assistant message"])
         }
 
-        let userMessage = self.conversations.value![index].messages[userMessageIndex]
+        var userMessage = self.conversations.value![index].messages[userMessageIndex]
 
         // Remove all messages from the user message onwards (including the user message itself)
         let messagesToRemove = Array(self.conversations.value![index].messages.suffix(from: userMessageIndex))
+        // Regeneration replaces visible replies, not their already incurred model usage.
+        // Keep the original request records on the retained user message, deduplicated by ID.
+        let records = messagesToRemove.flatMap { $0.inferenceUsage ?? [] }
+        if !records.isEmpty { userMessage.inferenceUsage = LLMUsageSummary(records).requests }
         await MainActor.run {
             self.conversations.transform {
                 $0[index].messages.removeSubrange(userMessageIndex...)

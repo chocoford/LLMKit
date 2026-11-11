@@ -10,6 +10,33 @@ struct LLMSchemeStateTests {
     private let model = SupportedModel.other("user/model")
     private let selection = LLMSchemeSelection(schemeID: "drawing", profileID: "quality")
 
+    @Test("Optimized BYOK persists tool-round totals separately from overflow-summary usage")
+    func optimizedUsageHistory() async throws {
+        try await fixture(credentials: { _ in .init(configuration: .openAI, apiKey: "usage-secret") }) { client, store in
+            store.mainReplies = [.tool, .overflow, .answer]
+            let tools = ToolRegistry()
+            await tools.register(SchemeDrawingTool(calls: SchemeCounter()))
+            let persistence = SchemeUsagePersistence()
+            let state = LLMStateObject(llmClient: client, toolRegistry: tools, persistenceProvider: persistence)
+            await state.refreshConversations()
+            try await client.withScheme(.init(schemeID: "drawing"), billing: .byok(model: model), connectionID: "connection") {
+                try await state.createConversation(id: "usage", model: model, agentConfig: .withTools(["draw"]), messages: [])
+                try await state.sendMessage(to: "usage", model: model, message: .content(.init(role: .user, content: "Draw")))
+            }
+            let conversation = try #require(state.conversations.value?.first)
+            let finalID = try #require(conversation.messages.last?.id)
+            #expect(conversation.usageSummary.requestCount == 3)
+            #expect(conversation.usageSummary.tokens?.totalTokens == 30)
+            #expect(conversation.usageSummary.filtered(purpose: "summary").tokens?.totalTokens == 10)
+            #expect(conversation.usageSummary(forMessageID: finalID).tokens?.totalTokens == 20)
+            #expect(conversation.usageSummary.requests.allSatisfy { $0.billingSource == .byok })
+            #expect(conversation.usageSummary.isComplete)
+            let restored = try #require(try await persistence.restoreConversations().first)
+            #expect(restored.usageSummary == conversation.usageSummary)
+            #expect(!String(decoding: try JSONEncoder().encode(restored), as: UTF8.self).contains("usage-secret"))
+        }
+    }
+
     @Test("Unbound legacy conversations retain their original chat route without Scheme discovery")
     func legacyRouting() async throws {
         try await fixture { client, store in
@@ -449,6 +476,31 @@ private actor SchemeMemoryPersistence: PersistenceProvider {
         if case .insert(let conversation) = action { inserted = conversation }
     }
 }
+private actor SchemeUsagePersistence: PersistenceProvider {
+    private var saved: Conversation?
+    func restoreConversations() throws -> [Conversation] {
+        try JSONDecoder().decode([Conversation].self, from: JSONEncoder().encode(saved.map { [$0] } ?? []))
+    }
+    func updateConversation(action: ConversationUpdateAction) {
+        switch action {
+        case .insert(let conversation): saved = conversation
+        case .delete: saved = nil
+        case .update(_, let change):
+            guard saved != nil else { return }
+            switch change {
+            case .insert(let messages):
+                for message in messages {
+                    if let index = saved!.messages.firstIndex(where: { $0.id == message.id }) { saved!.messages[index] = message }
+                    else { saved!.messages.append(message) }
+                }
+            case .update(let message):
+                if let index = saved!.messages.firstIndex(where: { $0.id == message.id }) { saved!.messages[index] = message }
+            case .delete(let ids): saved!.messages.removeAll { ids.contains($0.id) }
+            case .updateTitle(let title): saved!.title = title
+            }
+        }
+    }
+}
 private enum SchemeStoreFailure: Error { case write }
 private actor SchemeRouteGate {
     private var released = false
@@ -535,6 +587,9 @@ private final class SchemeFixtureStore: @unchecked Sendable {
                 case .answer: break
                 }
             }
+            message.inferenceUsage = [.init(responseID: message.id, modelID: "fixture/model",
+                billingSource: request.value(forHTTPHeaderField: "X-LLM-BYOK-Key") == nil ? .platform : .byok,
+                tokens: .init(promptTokens: 7, completionTokens: 3, totalTokens: 10), isComplete: true)]
             if path.hasSuffix("/stream") {
                 var data = Data("data: ".utf8)
                 data.append(try JSONEncoder().encode(message))

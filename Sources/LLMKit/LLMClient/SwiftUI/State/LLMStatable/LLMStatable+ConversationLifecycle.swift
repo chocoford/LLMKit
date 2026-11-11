@@ -116,18 +116,20 @@ extension LLMStatable {
         }
 
         // 调便宜 model 生成 summary。这次调用本身不在 conversation 上下文里, 不影响主对话。
-        let summaryText = try await self.generateCompactSummary(
+        let summary = try await self.generateCompactSummary(
             messages: toCompactContents,
             model: summaryModel,
-            client: summaryClient
+            client: summaryClient,
+            conversationID: conversationID
         )
 
         // 摘要消息: role=.user (避免冲淡主 system prompt), content 带前缀让模型识别;
         // isCompactSummary=true 让 UI 区分渲染。
         let summaryContent = ChatMessageContent(
             role: .user,
-            content: "[Summary of earlier conversation]\n\n\(summaryText)",
-            isCompactSummary: true
+            content: "[Summary of earlier conversation]\n\n\(summary.content ?? "")",
+            isCompactSummary: true,
+            inferenceUsage: summary.inferenceUsage
         )
         let summaryMessage = ChatMessage.content(summaryContent)
 
@@ -160,12 +162,13 @@ extension LLMStatable {
     }
 
     /// 用便宜 model 单独发一次 chat (不进 agent loop / 不进当前 conversation 上下文) 生成
-    /// "earlier conversation"摘要。返回纯文本, 调用方负责包成 isCompactSummary 消息。
+    /// "earlier conversation"摘要。保留独立的实际用量, 调用方负责包成 isCompactSummary 消息。
     private func generateCompactSummary(
         messages: [ChatMessageContent],
         model: SupportedModel,
-        client: LLMClient
-    ) async throws -> String {
+        client: LLMClient,
+        conversationID: String
+    ) async throws -> ChatMessageContent {
         let systemPrompt = """
         You are summarizing a conversation between a user and an assistant for context compression.
         Output a concise summary in 3-8 bullet points covering:
@@ -193,16 +196,23 @@ extension LLMStatable {
 
         let response: APIResponse<ChatMessageContent>
         if client.isDirectBYOK || LLMSchemeScope.provider(for: client) != nil {
-            response = try await client.auxiliaryChat(preferredModel: model, platformModel: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")
+            response = try await client.auxiliaryChat(preferredModel: model, platformModel: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)", purpose: "summary")
         } else {
-            response = try await client.chat(model: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")
+            let result = try await client.chat(model: model, system: systemPrompt, text: "Conversation to summarize:\n\n\(conversationText)")
+            response = result.classifyingUsage(purpose: "summary", model: model, billingSource: .platform)
         }
-        guard let summary = response.data?.content, !summary.isEmpty else {
+        guard let summary = response.data, summary.content?.isEmpty == false else {
+            if let anchorID = messages.last?.id {
+                try await recordAuxiliaryUsage(response.data?.inferenceUsage ?? [], in: conversationID, messageID: anchorID)
+            }
             throw NSError(
                 domain: "LLMStatable",
                 code: 5,
                 userInfo: [NSLocalizedDescriptionKey: "LLM returned empty compact summary"]
             )
+        }
+        if let credits = response.credits {
+            updateCreditsInfo(CreditsInfo(balance: credits.remains, periodicCredits: nil, purchasedCredits: 0))
         }
         return summary
     }

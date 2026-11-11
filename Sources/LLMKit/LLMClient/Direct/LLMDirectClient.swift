@@ -100,7 +100,17 @@ final class LLMDirectClient: Sendable {
         var request = try makeRequest(credentials: credentials, catalog: false)
         request.httpBody = try LLMChatCompletionsCodec.encode(model: model.rawValue, messages: includeBasePrompt ? withPrompt(messages) : messages, tools: tools, configuration: credentials.configuration, stream: false)
         let data = try await responseData(for: request, limit: 16 * 1024 * 1024)
-        return try LLMChatCompletionsCodec.decode(data)
+        var response = try LLMChatCompletionsCodec.decode(data)
+        if var message = response.data {
+            var record = message.inferenceUsage?.first ?? .init(responseID: message.id)
+            record.billingSource = .byok
+            if record.modelID == nil { record.modelID = try credentials.configuration.modelMapping.resolve(model.rawValue) }
+            record.tokens = response.usage
+            record.isComplete = true
+            message.inferenceUsage = [record]
+            response.data = message
+        }
+        return response
     }
 
     func streamChat(model: SupportedModel, messages: [ChatMessageContent], agentID: String?, tools: [ToolSchema]?) async throws -> AsyncThrowingStream<StreamChatResponse, Error> {
@@ -127,12 +137,23 @@ final class LLMDirectClient: Sendable {
                     guard (response as? HTTPURLResponse)?.mimeType?.lowercased() == "text/event-stream" else { throw LLMChatCompletionsError.invalidResponse }
                     var frames = LLMChatCompletionsFrames()
                     var accumulator = LLMChatCompletionsAccumulator()
+                    var record = LLMInferenceUsage(modelID: try credentials.configuration.modelMapping.resolve(model.rawValue), billingSource: .byok)
+                    var hasMessage = false
                     for try await byte in bytes {
                         try Task.checkCancellation()
                         guard let frame = try frames.append(byte) else { continue }
                         switch frame {
                         case .data(let data):
-                            if let message = try accumulator.append(data) { continuation.yield(.message(message)) }
+                            let update = try accumulator.append(data)
+                            if update != nil { hasMessage = true }
+                            if hasMessage, update != nil || record.tokens != accumulator.usage {
+                                record.responseID = accumulator.currentMessage.id
+                                record.modelID = accumulator.modelID ?? record.modelID
+                                record.tokens = accumulator.usage
+                                var message = accumulator.currentMessage
+                                message.inferenceUsage = [record]
+                                continuation.yield(.message(message))
+                            }
                         case .done: break
                         }
                         if frames.isComplete { break }
@@ -140,6 +161,10 @@ final class LLMDirectClient: Sendable {
                     try Task.checkCancellation()
                     try frames.validateEnd(requiresDoneMarker: credentials.configuration.options.requiresDoneMarker)
                     try accumulator.validateEnd()
+                    record.isComplete = true
+                    var completed = accumulator.currentMessage
+                    completed.inferenceUsage = [record]
+                    continuation.yield(.message(completed))
                     // There is deliberately no platform settlement event.
                     continuation.finish()
                 } catch { continuation.finish(throwing: safeError(error)) }

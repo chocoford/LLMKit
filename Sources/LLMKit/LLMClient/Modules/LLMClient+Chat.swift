@@ -29,7 +29,7 @@ extension LLMClient {
         ])
 
         if let directClient { return try await directClient.chat(model: model, messages: preparedMessages, agentID: agentID, tools: tools) }
-        return try await networking.postInference(
+        let response: APIResponse<ChatMessageContent> = try await networking.postInference(
             "/chat",
             body: ChatRequest(
                 model: model,
@@ -40,6 +40,7 @@ extension LLMClient {
             ),
             credentials: credentials
         )
+        return response.classifyingUsage(purpose: "chat", model: model, billingSource: credentials == nil ? .platform : .byok)
     }
 
     public func chat<Metadata: Codable & Equatable & Sendable>(
@@ -53,11 +54,12 @@ extension LLMClient {
         let preparedMessages = try await prepareUploadFiles(for: messages)
 
         if let directClient { return try await directClient.chat(model: model, messages: preparedMessages, agentID: agentID, tools: tools) }
-        return try await networking.postInference(
+        let response: APIResponse<ChatMessageContent> = try await networking.postInference(
             "/chat",
             body: ChatRequest(model: model, messages: preparedMessages, metadata: metadata, agentID: agentID, tools: tools),
             credentials: credentials
         )
+        return response.classifyingUsage(purpose: "chat", model: model, billingSource: credentials == nil ? .platform : .byok)
     }
 
     public func streamChat<Metadata: Codable & Equatable & Sendable>(
@@ -110,14 +112,16 @@ extension LLMClient {
         preferredModel: SupportedModel,
         platformModel: SupportedModel,
         system: String,
-        text: String
+        text: String,
+        purpose: String = "title"
     ) async throws -> APIResponse<ChatMessageContent> {
         if let directClient {
-            return try await directClient.chat(
+            let result = try await directClient.chat(
                 model: directClient.auxiliaryModel(fallback: preferredModel),
                 messages: [.init(role: .system, content: system), .init(role: .user, content: text)],
                 agentID: nil, tools: nil, includeBasePrompt: false
             )
+            return result.classifyingUsage(purpose: purpose, model: preferredModel, billingSource: .byok)
         }
         let scoped = LLMSchemeScope.provider(for: self)
         let preferredModel = scoped?.auxiliaryModel(fallback: preferredModel) ?? preferredModel
@@ -126,9 +130,10 @@ extension LLMClient {
             credentials.configuration.options.auxiliaryModel.map(SupportedModel.init(rawValue:)) ?? preferredModel
         } ?? platformModel
         let messages = [ChatMessageContent(role: .system, content: system), .init(role: .user, content: text)]
-        return try await networking.postInference(
+        let result: APIResponse<ChatMessageContent> = try await networking.postInference(
             "/chat", body: ChatRequest<EmptyMetadata>(model: model, messages: messages), credentials: credentials
         )
+        return result.classifyingUsage(purpose: purpose, model: model, billingSource: credentials == nil ? .platform : .byok)
     }
 
 //    public func streamChat(
@@ -146,4 +151,25 @@ extension LLMClient {
 //            }
 //        }
 //    }
+}
+
+extension APIResponse where T == ChatMessageContent {
+    func classifyingUsage(purpose: String, model: SupportedModel, billingSource: LLMAccessBillingSource) -> Self {
+        var response = self
+        guard var message = response.data else { return response }
+        var records = message.inferenceUsage ?? []
+        if records.isEmpty {
+            records = [.init(responseID: message.id, modelID: model.rawValue,
+                billingSource: billingSource, tokens: usage, isComplete: true)]
+        }
+        for index in records.indices {
+            records[index].purpose = purpose
+            records[index].billingSource = records[index].billingSource ?? billingSource
+            if records[index].tokens == nil { records[index].tokens = usage }
+            records[index].isComplete = true
+        }
+        message.inferenceUsage = records
+        response.data = message
+        return response
+    }
 }

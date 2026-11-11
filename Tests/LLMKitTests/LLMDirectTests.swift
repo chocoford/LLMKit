@@ -28,6 +28,9 @@ struct LLMDirectTests {
             #expect(response.credits == nil)
             #expect(response.data?.usage == nil)
             #expect(response.usage?.totalTokens == 3)
+            #expect(response.data?.usageSummary.tokens?.totalTokens == 3)
+            #expect(response.data?.inferenceUsage?.first?.billingSource == .byok)
+            #expect(response.data?.usageSummary.isComplete == true)
             let request = try #require(DirectFixtureProtocol.store.requests(id).first)
             let body = try Self.payload(request)
             #expect(body["model"] as? String == "future/model:v9")
@@ -80,7 +83,7 @@ struct LLMDirectTests {
         }
     }
 
-    @Test("Complete streams, including OpenRouter usage tails, emit no duplicate snapshot or settlement", arguments: [false, true])
+    @Test("Usage snapshots update the same response without platform settlement", arguments: [false, true])
     func completeStream(openRouterUsageTail: Bool) async throws {
         let tail = "data: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n"
         let wire = openRouterUsageTail
@@ -89,14 +92,130 @@ struct LLMDirectTests {
         try await withDirectFixture([.sse(wire)]) { client, id, _ in
             let stream = try await client.streamChat(model: .other("manual-model"), text: "hello")
             var contents: [String] = []
+            var last: ChatMessageContent?
             for try await event in stream {
                 switch event {
-                case .message(let message): contents.append(message.content ?? ""); #expect(message.usage == nil)
+                case .message(let message):
+                    contents.append(message.content ?? "")
+                    last = message
+                    #expect(message.id == "r" && message.usage == nil)
                 case .settlement: Issue.record("Direct must never emit platform settlement")
                 }
             }
-            #expect(contents == ["H", "Hi"])
+            #expect(contents.first == "H" && contents.last == "Hi")
+            #expect(Set(contents) == ["H", "Hi"])
+            #expect(last?.usageSummary.tokens?.totalTokens == (openRouterUsageTail ? 3 : nil))
+            #expect(last?.inferenceUsage?.first?.isComplete == true)
+            #expect(last?.inferenceUsage?.first?.billingSource == .byok)
             #expect(DirectFixtureProtocol.store.requests(id).count == 1)
+        }
+    }
+
+    @Test("State saves multi-round usage and regeneration keeps previous incurred usage")
+    @MainActor
+    func persistedMultiRoundUsage() async throws {
+        let call = "data: {\"id\":\"tool-round\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"draw\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+        try await withDirectFixture([.sse(Self.withUsage(call, id: "tool-round", finish: "tool_calls")), .sse(Self.withUsage(Self.complete))]) { client, _, configuration in
+            let original = Conversation(id: "usage", type: .regular, agentConfig: .withTools(["draw"]),
+                title: "Saved", createdAt: .now, lastChatAt: .now,
+                directConnection: .init(configuration: configuration, chatModel: .other("manual-model")))
+            let persistence = DirectUsagePersistence(original)
+            let tools = ToolRegistry()
+            await tools.register(DirectDrawingTool(probe: DirectToolProbe()))
+            let state = LLMStateObject(llmClient: client, toolRegistry: tools, persistenceProvider: persistence)
+            await state.refreshConversations()
+            try await state.sendMessage(to: original.id, model: .other("manual-model"),
+                message: .content(.init(role: .user, content: "Draw")))
+            let conversation = try #require(state.conversations.value?.first)
+            let finalID = try #require(conversation.messages.last?.id)
+            #expect(conversation.usageSummary.requestCount == 2)
+            #expect(conversation.usageSummary.tokens?.totalTokens == 6)
+            #expect(conversation.usageSummary(forMessageID: finalID).tokens?.totalTokens == 6)
+            #expect(conversation.usageSummary.isComplete)
+            let restored = try #require(try await persistence.restoreConversations().first)
+            #expect(restored.usageSummary == conversation.usageSummary)
+            #expect(restored.messages.allSatisfy { $0.usage == nil })
+
+            try await state.regenerateMessage(in: original.id, fromMessageID: finalID, model: .other("manual-model"))
+            let retried = try #require(state.conversations.value?.first)
+            let retriedID = try #require(retried.messages.last?.id)
+            #expect(retried.usageSummary.requestCount == 3)
+            #expect(retried.usageSummary.tokens?.totalTokens == 9)
+            #expect(retried.usageSummary(forMessageID: retriedID).tokens?.totalTokens == 3)
+            #expect(try await persistence.restoreConversations().first?.usageSummary == retried.usageSummary)
+        }
+    }
+
+    @Test("Usage received before premature EOF is persisted as incomplete, not free")
+    @MainActor
+    func persistPartialUsage() async throws {
+        let wire = Self.withUsage(Self.complete).replacingOccurrences(of: "data: [DONE]\n\n", with: "")
+        try await withDirectFixture([.sse(wire)]) { client, _, configuration in
+            let original = Conversation(id: "partial", type: .regular, title: "Saved", createdAt: .now,
+                lastChatAt: .now, directConnection: .init(configuration: configuration, chatModel: .other("manual-model")))
+            let persistence = DirectUsagePersistence(original)
+            let state = LLMStateObject(llmClient: client, persistenceProvider: persistence)
+            await state.refreshConversations()
+            do {
+                try await state.sendMessage(to: original.id, model: .other("manual-model"),
+                    message: .content(.init(role: .user, content: "Hello")))
+                Issue.record("Missing DONE must still fail")
+            } catch is LLMChatCompletionsError {}
+            let restored = try #require(try await persistence.restoreConversations().first)
+            #expect(restored.usageSummary.tokens?.totalTokens == 3)
+            #expect(restored.usageSummary.incompleteRequestCount == 1)
+            #expect(!restored.usageSummary.isComplete)
+        }
+    }
+
+    @Test("Cancelling after reported usage preserves that accounting in history")
+    @MainActor
+    func persistCancelledUsage() async throws {
+        var response = DirectFixtureResponse.sse(Self.withUsage(Self.complete).replacingOccurrences(of: "data: [DONE]\n\n", with: ""))
+        response.finishes = false
+        try await withDirectFixture([response]) { client, _, configuration in
+            let original = Conversation(id: "cancel-usage", type: .regular, title: "Saved", createdAt: .now,
+                lastChatAt: .now, directConnection: .init(configuration: configuration, chatModel: .other("manual-model")))
+            let persistence = DirectUsagePersistence(original)
+            let state = LLMStateObject(llmClient: client, persistenceProvider: persistence)
+            await state.refreshConversations()
+            let send = Task {
+                try await state.sendMessage(to: original.id, model: .other("manual-model"),
+                    message: .content(.init(role: .user, content: "Hello")))
+            }
+            for _ in 0..<200 {
+                if state.conversations.value?.first?.usageSummary.tokens != nil { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            #expect(state.conversations.value?.first?.usageSummary.tokens?.totalTokens == 3)
+            state.cancelGeneration(conversationID: original.id)
+            try await send.value
+            let restored = try #require(try await persistence.restoreConversations().first)
+            #expect(restored.usageSummary.tokens?.totalTokens == 3)
+            #expect(restored.usageSummary.incompleteRequestCount == 1)
+            #expect(!restored.usageSummary.isComplete)
+        }
+    }
+
+    @Test("Auxiliary metadata uses existing message updates; legacy usage stays unknown")
+    @MainActor
+    func auxiliaryUsagePersistence() async throws {
+        try await withDirectFixture([.json(Self.answer)]) { client, _, configuration in
+            let user = ChatMessage.content(.init(role: .user, content: "Hello"))
+            var original = Conversation(id: "aux", type: .regular, title: "Saved", createdAt: .now, lastChatAt: .now,
+                directConnection: .init(configuration: configuration, chatModel: .other("manual-model")))
+            original.messages = [user, .content(.init(id: "legacy", role: .assistant, content: "Old"))]
+            let persistence = DirectUsagePersistence(original)
+            let state = LLMStateObject(llmClient: client, persistenceProvider: persistence)
+            await state.refreshConversations()
+            let result = try await client.auxiliaryChat(preferredModel: .other("manual-model"),
+                platformModel: .gpt4o, system: "Title", text: "Hello")
+            try await state.recordAuxiliaryUsage(result.data?.inferenceUsage ?? [], in: original.id, messageID: user.id)
+            let restored = try #require(try await persistence.restoreConversations().first)
+            #expect(restored.usageSummary.filtered(purpose: "title").tokens?.totalTokens == 3)
+            #expect(restored.usageSummary.unreportedRequestCount == 1)
+            #expect(restored.usageSummary(forMessageID: "legacy").tokens == nil)
+            #expect(!restored.usageSummary.isComplete)
         }
     }
 
@@ -302,6 +421,8 @@ struct LLMDirectTests {
             var firstReplies = 0
             let message = try await state._temporaryChat(model: .other("manual-model"), messages: [.content(.init(role: .user, content: "hello"))], stream: streaming, onUpdate: { _ in }, onFirstReply: { _ in firstReplies += 1 })
             #expect(message.content == "Hi")
+            #expect(message.inferenceUsage?.count == 1)
+            #expect(message.usageSummary.tokens?.totalTokens == (streaming ? nil : 3))
             #expect(firstReplies == 1)
             #expect(state.creditsInfo == nil)
         }
@@ -322,6 +443,11 @@ struct LLMDirectTests {
     private static let answer = #"{"id":"r","choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#
     private static let complete = "data: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"H\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"r\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"i\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
 
+    private static func withUsage(_ wire: String, id: String = "r", finish: String = "stop") -> String {
+        let tail = #"{"id":"\#(id)","choices":[{"index":0,"delta":{},"finish_reason":"\#(finish)"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#
+        return wire.replacingOccurrences(of: "data: [DONE]\n\n", with: "data: \(tail)\n\ndata: [DONE]\n\n")
+    }
+
     private static func payload(_ request: URLRequest) throws -> [String: Any] {
         var data = request.httpBody ?? Data()
         if data.isEmpty, let stream = request.httpBodyStream {
@@ -338,6 +464,31 @@ struct LLMDirectTests {
 }
 
 private actor DirectToolProbe { var calls = 0; func record() { calls += 1 } }
+private actor DirectUsagePersistence: PersistenceProvider {
+    private var saved: Conversation
+    init(_ saved: Conversation) { self.saved = saved }
+    func restoreConversations() throws -> [Conversation] {
+        try JSONDecoder().decode([Conversation].self, from: JSONEncoder().encode([saved]))
+    }
+    func updateConversation(action: ConversationUpdateAction) throws {
+        switch action {
+        case .insert(let conversation): saved = conversation
+        case .delete: break
+        case .update(_, let change):
+            switch change {
+            case .insert(let messages):
+                for message in messages {
+                    if let index = saved.messages.firstIndex(where: { $0.id == message.id }) { saved.messages[index] = message }
+                    else { saved.messages.append(message) }
+                }
+            case .update(let message):
+                if let index = saved.messages.firstIndex(where: { $0.id == message.id }) { saved.messages[index] = message }
+            case .delete(let ids): saved.messages.removeAll { ids.contains($0.id) }
+            case .updateTitle(let title): saved.title = title
+            }
+        }
+    }
+}
 private struct DirectDrawingTool: Tool {
     let probe: DirectToolProbe
     let name = "draw"

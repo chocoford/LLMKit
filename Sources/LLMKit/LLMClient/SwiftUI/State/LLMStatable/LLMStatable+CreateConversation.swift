@@ -114,10 +114,13 @@ extension LLMStatable {
             )
         }
 
-        // Generate title asynchronously if there's a user message
+        // Keep title generation parallel, but attach its accounting only after input
+        // persistence. A fast response must not lose usage before the user message exists.
+        var titleUsageTask: Task<[LLMInferenceUsage], Never>?
         if let firstUserMessage = messages.first, let content = firstUserMessage.content, !content.isEmpty {
             let titleClient = llmClient
-            Task {
+            titleUsageTask = Task {
+              var usageRecords: [LLMInferenceUsage] = []
               do {
                 logger.info("Generating title for new conversation...")
                 let result = try await titleClient.auxiliaryChat(
@@ -138,6 +141,7 @@ extension LLMStatable {
                     """,
                     text: content
                 )
+                usageRecords = result.data?.inferenceUsage ?? []
 
                 if let credits = result.credits {
                     self.updateCreditsInfo(CreditsInfo(
@@ -159,10 +163,21 @@ extension LLMStatable {
                         }
                     }
                 }
+                return usageRecords
               } catch {
                 // A title failure must not escape an unobserved Task or change inference modes.
                 logger.warning("Title generation failed; keeping the local conversation title.")
+                return usageRecords
               }
+            }
+        }
+        defer {
+            if let titleUsageTask, let anchorID = messages.first?.id {
+                Task {
+                    let records = await titleUsageTask.value
+                    do { try await recordAuxiliaryUsage(records, in: id, messageID: anchorID) }
+                    catch { logger.error("Failed to persist title usage: \(error)") }
+                }
             }
         }
 

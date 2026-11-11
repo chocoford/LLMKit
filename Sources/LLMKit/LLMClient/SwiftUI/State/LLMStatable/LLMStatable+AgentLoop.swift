@@ -26,7 +26,8 @@ extension LLMStatable {
         metadata: Metadata,
         invocationContext: (any ChatInvocationContext)?,
         replyTransformer: ((_ assistantMessage: ChatMessage) async throws -> ChatMessage)?,
-        contextOverflowRetried: Bool = false
+        contextOverflowRetried: Bool = false,
+        generationID: String = UUID().uuidString
     ) async throws {
         guard case .loaded = conversations else {
             throw ConversationNotReadyError()
@@ -82,9 +83,11 @@ extension LLMStatable {
             guard case .content = message else { return }
             guard !persistedMessageIDs.contains(message.id) else { return }
             do {
-                try await persistenceProvider?.updateConversation(
-                    action: .update(conversationID, .insert([message]))
-                )
+                let provider = persistenceProvider
+                // Preserve already received usage even if the generation task was cancelled.
+                try await Task {
+                    try await provider?.updateConversation(action: .update(conversationID, .insert([message])))
+                }.value
                 persistedMessageIDs.insert(message.id)
             } catch {
                 logger.error("Failed to persist completed message \(message.id): \(error)")
@@ -158,7 +161,8 @@ extension LLMStatable {
                     // 工具产出的图片(base64) 自动走 R2, 跟 user message 同一条 prepareUploadFiles 路径
                     try await llmClient.prepareUploadFiles(for: toolMessage)
                 },
-                toolApprovalHandler: approvalHandler
+                toolApprovalHandler: approvalHandler,
+                generationID: generationID
             )
 
             // Consume the stream
@@ -267,6 +271,9 @@ extension LLMStatable {
             var transformedMessage = finalMessage
             if let replyTransformer {
                 transformedMessage = try await replyTransformer(transformedMessage)
+                if transformedMessage.inferenceUsage == nil {
+                    transformedMessage.inferenceUsage = finalMessage.inferenceUsage
+                }
             }
 
             if case .content(let content) = transformedMessage {
@@ -297,6 +304,12 @@ extension LLMStatable {
             // 先 flush throttler pending — 即便 cancel/error, 节流窗口里最后一帧的内容也要落到 messages,
             // 否则 partial assistant 内容截止时间会是"最后一次 flush" 而非"cancel 那一刻", 短少 0-N ms 内容。
             await MainActor.run { assistantThrottler.flushNow() }
+            if let conversation = conversations.value?.first(where: { $0.id == conversationID }) {
+                for message in conversation.messages where message.role == .assistant
+                    && message.inferenceUsage?.contains(where: { $0.generationID == generationID }) == true {
+                    await persistCompletedMessage(message)
+                }
+            }
 
             if Task.isCancelled || isUserCancellationError(error) {
                 if let i = conversations.value?.firstIndex(where: { $0.id == conversationID }) {
@@ -352,7 +365,8 @@ extension LLMStatable {
                     metadata: metadata,
                     invocationContext: invocationContext,
                     replyTransformer: replyTransformer,
-                    contextOverflowRetried: true
+                    contextOverflowRetried: true,
+                    generationID: generationID
                 )
                 return
             }

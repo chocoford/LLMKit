@@ -75,6 +75,59 @@ its remaining networking/TLS configuration and lifetime are managed by the host 
 Pass a compatible selected model explicitly to `ask`; its existing OpenAI default is not
 automatically substituted with a vendor-specific model.
 
+## Actual token usage (Basic / Optimized BYOK)
+
+Actual model usage is separate from platform credits. `ChatMessageContent.usage` and
+`.settlement(CreditsResult)` retain their original credit semantics. The additive optional
+`inferenceUsage` field contains actual request records and is carried by ordinary message
+events; no new stream enum case or required persistence protocol method is introduced.
+
+```swift
+// All model/tool rounds for the generation that produced this reply:
+let turn = conversation.usageSummary(forMessageID: reply.id)
+if let tokens = turn.tokens {
+    // These are provider-reported totals, not estimated context length.
+    showTokens(input: tokens.promptTokens, output: tokens.completionTokens,
+               total: tokens.totalTokens, incomplete: !turn.isComplete)
+}
+// A nil total means "not reported", never "0 tokens" or "free".
+
+let all = conversation.usageSummary
+let chat = all.filtered(purpose: "chat", billingSource: .byok)
+let titles = all.filtered(purpose: "title")
+let summaries = all.filtered(purpose: "summary")
+```
+
+Each record has its own request `id`, optional provider `responseID`, `modelID`,
+`billingSource`, token counters and completion flag. `generationID` groups the tool rounds
+of one generation, including automatic context-overflow recovery. Purpose is an extensible
+string (`chat`, `title`, `summary`); it does not encode App features or subscription plans.
+The billing snapshot belongs to each request: changing the current connection/billing mode
+must not relabel historical usage.
+
+Both streaming and non-streaming Direct/Basic and backend/Optimized BYOK preserve actual
+tokens. Streaming accounting updates the same message/request; do not add every snapshot.
+`LLMUsageSummary` deduplicates by request ID and sums distinct model calls. Titles/summaries
+are classified separately, not silently included in a reply's chat total. Regeneration
+retains the replaced calls' accounting on the original user message, so conversation totals
+still include already incurred usage; the new reply's generation total remains separate.
+
+`tokens == nil` means missing provider data. `isComplete` on a request indicates successful
+upstream completion; on a summary it additionally requires every request to have reported
+usage. A partial sum can coexist with missing/incomplete requests; inspect
+`unreportedRequestCount` / `incompleteRequestCount`. Known usage is retained on errors and
+cancellation without accepting a truncated response as success. No tokenizer estimate,
+platform price conversion, inferred dollar cost or platform settlement is fabricated.
+
+History uses the existing `PersistenceProvider` message insert/update actions. Stores that
+serialize complete `ChatMessage` / `ChatMessageContent` values retain records automatically;
+stores with explicit SwiftData/Core Data/SQL field mappings must also save and restore
+`inferenceUsage` (e.g. as optional Codable JSON). Auxiliary metadata can update an existing
+user/summary message. Old history decodes with no records and remains unreported.
+Old clients ignore the new optional field; new clients tolerate old servers, but cannot
+recover token statistics an old server never sent. Deploy updated Core, Server and Kit
+for the full Optimized path. No server database migration is required.
+
 ## App-owned access preflight
 
 Pass `accessPolicy: LLMAccessPolicyProvider` to the normal `LLMClient` initializer to check
